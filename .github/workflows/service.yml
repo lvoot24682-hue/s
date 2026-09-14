@@ -40,7 +40,7 @@ jobs:
     # أقصى مدة للـ Runner
     # ========================================================
 
-    timeout-minutes: 245
+    timeout-minutes: 300
 
 
     steps:
