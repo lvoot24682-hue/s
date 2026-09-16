@@ -10,24 +10,27 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # ============================================
-      # تحميل المشروع
-      # ============================================
-      - name: Checkout
+
+      # ============================================================
+      # Checkout
+      # ============================================================
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ============================================
+
+      # ============================================================
       # Node.js
-      # ============================================
+      # ============================================================
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
-      # ============================================
+
+      # ============================================================
       # Google Chrome الرسمي
-      # ============================================
+      # ============================================================
       - name: Install Google Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@v2
@@ -35,10 +38,11 @@ jobs:
           chrome-version: stable
           install-dependencies: true
 
-      # ============================================
+
+      # ============================================================
       # التأكد من Chrome
-      # ============================================
-      - name: Check Chrome
+      # ============================================================
+      - name: Check Google Chrome
         env:
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: |
@@ -54,40 +58,60 @@ jobs:
           "$CHROME_PATH" --version
 
           echo ""
-          echo "System google-chrome:"
+          echo "System Chrome:"
           which google-chrome || true
 
           google-chrome --version || true
 
           echo "========================================"
 
-      # ============================================
-      # تثبيت npm
-      # ============================================
-      - name: Install dependencies
-       run: npm install
 
-      # ============================================
-      # تشغيل البوت
-      # ============================================
+      # ============================================================
+      # تثبيت Dependencies
+      # ============================================================
+      - name: Install dependencies
+        run: |
+          echo "========================================"
+          echo "Installing npm dependencies"
+          echo "========================================"
+
+          npm install
+
+          echo "========================================"
+          echo "npm install completed"
+          echo "========================================"
+
+
+      # ============================================================
+      # تشغيل WOLF
+      # ============================================================
       - name: Start WOLF
         env:
           WOLF_EMAIL: ${{ secrets.WOLF_EMAIL }}
           WOLF_PASSWORD: ${{ secrets.WOLF_PASSWORD }}
 
-          # مسار Chrome الرسمي
+          # مسار Google Chrome الرسمي
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
 
         run: |
           echo "========================================"
-          echo "Starting WOLF"
+          echo "Starting WOLF Bot"
           echo "========================================"
 
-          echo "Using Chrome:"
+          echo "Chrome:"
           "$CHROME_PATH" --version
 
+          echo ""
           echo "Chrome path:"
           echo "$CHROME_PATH"
+
+          echo ""
+          echo "Node:"
+          node --version
+
+          echo ""
+          echo "NPM:"
+          npm --version
 
           echo "========================================"
 
