@@ -6,21 +6,22 @@ on:
 jobs:
   wolf:
     runs-on: ubuntu-latest
-
     timeout-minutes: 360
 
     steps:
 
-      # ============================================================
+      # ========================================
       # Checkout
-      # ============================================================
+      # ========================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # ============================================================
+      # ========================================
       # Node.js
-      # ============================================================
+      # ========================================
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -28,9 +29,10 @@ jobs:
           cache: npm
 
 
-      # ============================================================
+      # ========================================
       # Google Chrome الرسمي
-      # ============================================================
+      # ========================================
+
       - name: Install Google Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@v2
@@ -39,17 +41,20 @@ jobs:
           install-dependencies: true
 
 
-      # ============================================================
-      # التأكد من Chrome
-      # ============================================================
+      # ========================================
+      # التحقق من Chrome
+      # ========================================
+
       - name: Check Google Chrome
         env:
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: |
+
           echo "========================================"
-          echo "Google Chrome"
+          echo "GOOGLE CHROME"
           echo "========================================"
 
+          echo ""
           echo "Chrome path:"
           echo "$CHROME_PATH"
 
@@ -58,46 +63,101 @@ jobs:
           "$CHROME_PATH" --version
 
           echo ""
-          echo "System Chrome:"
-          which google-chrome || true
+          echo "System google-chrome:"
+          command -v google-chrome || true
 
           google-chrome --version || true
 
+          echo ""
+          echo "System google-chrome-stable:"
+          command -v google-chrome-stable || true
+
+          google-chrome-stable --version || true
+
+          echo ""
           echo "========================================"
 
 
-      # ============================================================
+      # ========================================
       # تثبيت Dependencies
-      # ============================================================
+      # ========================================
+
       - name: Install dependencies
         run: |
+
           echo "========================================"
-          echo "Installing npm dependencies"
+          echo "NPM INSTALL"
           echo "========================================"
 
           npm install
 
-          echo "========================================"
-          echo "npm install completed"
+          echo ""
+          echo "Node:"
+          node --version
+
+          echo ""
+          echo "NPM:"
+          npm --version
+
+          echo ""
           echo "========================================"
 
 
-      # ============================================================
+      # ========================================
+      # اختبار Xvfb
+      # ========================================
+
+      - name: Test Xvfb
+        run: |
+
+          echo "========================================"
+          echo "TESTING XVFB"
+          echo "========================================"
+
+          which xvfb-run || true
+          which Xvfb || true
+
+          echo ""
+          echo "Starting virtual display..."
+
+          xvfb-run \
+            -a \
+            --server-args="-screen 0 600x600x24" \
+            bash -c '
+              echo "DISPLAY=$DISPLAY"
+
+              if [ -z "$DISPLAY" ]; then
+                echo "❌ DISPLAY is empty"
+                exit 1
+              fi
+
+              echo "✅ X Server is working"
+              echo "DISPLAY=$DISPLAY"
+            '
+
+          echo ""
+          echo "========================================"
+
+
+      # ========================================
       # تشغيل WOLF
-      # ============================================================
+      # ========================================
+
       - name: Start WOLF
         env:
+
           WOLF_EMAIL: ${{ secrets.WOLF_EMAIL }}
           WOLF_PASSWORD: ${{ secrets.WOLF_PASSWORD }}
 
-          # مسار Google Chrome الرسمي
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
 
         run: |
+
           echo "========================================"
-          echo "Starting WOLF Bot"
+          echo "STARTING WOLF"
           echo "========================================"
 
+          echo ""
           echo "Chrome:"
           "$CHROME_PATH" --version
 
@@ -113,6 +173,31 @@ jobs:
           echo "NPM:"
           npm --version
 
+          echo ""
+          echo "========================================"
+          echo "STARTING XVFB"
           echo "========================================"
 
-          npm start
+          xvfb-run \
+            -a \
+            --server-num=99 \
+            --server-args="-screen 0 600x600x24 -ac +extension GLX +render -noreset" \
+            env \
+              DISPLAY=:99 \
+              WOLF_EMAIL="$WOLF_EMAIL" \
+              WOLF_PASSWORD="$WOLF_PASSWORD" \
+              CHROME_PATH="$CHROME_PATH" \
+              npm start
+
+
+      # ========================================
+      # رفع صور التشخيص
+      # ========================================
+
+      - name: Upload WOLF screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wolf-screenshots
+          path: /tmp/wolf-*.png
+          if-no-files-found: warn
