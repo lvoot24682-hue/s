@@ -7,7 +7,7 @@ import { chromium } from "playwright";
 // ============================================================
 
 const LOGIN_URL = "https://wolf.live/mna";
-const APP_URL = "https://app.wolf.live/";
+const APP_URL = "https://app.wolf.live/mna";
 
 const VIEWPORT = { width: 600, height: 600 };
 
@@ -24,7 +24,7 @@ const STEPS = [
     { label: "زر الدخول", x: 243, y: 281, type: "click" }
 ];
 
-const WOLF_EMAIL = process.env.WOLF_EMAIL || "Mona24682@gmail.com";
+const WOLF_EMAIL = process.env.WOLF_EMAIL || "mona24682@gmail.com";
 const WOLF_PASSWORD = process.env.WOLF_PASSWORD || "As1412as";
 
 // جلسة Chrome تُحفظ محلياً على نفس الجهاز فقط (ما تُرفع ولا تنتهي بـ24 ساعة،
@@ -229,8 +229,77 @@ async function extractCredentialsFromChrome() {
         throw new Error(`❌ فشل قراءة LocalStorage: ${error.message}`);
     }
 
+    console.log(`📋 مفاتيح localStorage الموجودة (${Object.keys(data || {}).length}):`);
+    console.log(Object.keys(data || {}).join(", ") || "(فارغ)");
+
     const token = data?.v3APIToken || null;
-    const appCheckToken = data?.appCheckToken || null;
+    let appCheckToken = data?.appCheckToken || null;
+
+    // ------------------------------------------------------
+    // fallback: Firebase App Check غالباً يخزّن التوكن بـ IndexedDB
+    // ------------------------------------------------------
+
+    if (!appCheckToken) {
+
+        console.log("🔎 appCheckToken غير موجود بـ localStorage، جاري البحث بـ IndexedDB...");
+
+        try {
+
+            const indexedDbDump = await wolfPage.evaluate(async () => {
+
+                const dbs = await indexedDB.databases();
+                const output = {};
+
+                for (const dbInfo of dbs) {
+
+                    try {
+
+                        const db = await new Promise((resolve, reject) => {
+                            const req = indexedDB.open(dbInfo.name);
+                            req.onsuccess = () => resolve(req.result);
+                            req.onerror = () => reject(req.error);
+                        });
+
+                        for (const storeName of db.objectStoreNames) {
+
+                            const tx = db.transaction(storeName, "readonly");
+                            const store = tx.objectStore(storeName);
+
+                            const records = await new Promise((resolve, reject) => {
+                                const r = store.getAll();
+                                r.onsuccess = () => resolve(r.result);
+                                r.onerror = () => reject(r.error);
+                            });
+
+                            output[`${dbInfo.name}/${storeName}`] = records;
+                        }
+
+                        db.close();
+
+                    } catch (e) {
+                        output[dbInfo.name] = `خطأ: ${e.message}`;
+                    }
+                }
+
+                return output;
+            });
+
+            console.log("📋 محتوى IndexedDB (تشخيصي):");
+            console.log(JSON.stringify(indexedDbDump, null, 2).slice(0, 3000));
+
+            // بحث تلقائي عن أي قيمة تشبه توكن App Check داخل النتائج
+            const flatText = JSON.stringify(indexedDbDump);
+            const match = flatText.match(/"token"\s*:\s*"([^"]{20,})"/);
+
+            if (match) {
+                appCheckToken = match[1];
+                console.log("✅ تم العثور على مرشّح appCheckToken داخل IndexedDB.");
+            }
+
+        } catch (error) {
+            console.log(`⚠️ تعذر فحص IndexedDB: ${error.message}`);
+        }
+    }
 
     if (!token) {
         console.log("❌ لم يتم العثور على v3APIToken");
@@ -239,7 +308,7 @@ async function extractCredentialsFromChrome() {
     }
 
     if (!appCheckToken) {
-        console.log("❌ لم يتم العثور على appCheckToken");
+        console.log("❌ لم يتم العثور على appCheckToken (لا بـ localStorage ولا IndexedDB)");
         throw new Error("لم يتم العثور على appCheckToken بعد تسجيل الدخول");
     }
 
