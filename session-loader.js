@@ -17,7 +17,7 @@ const WIDTH = 600;
 const HEIGHT = 600;
 
 const WOLF_EMAIL = "mona24682@gmail.com";
-const WOLF_PASSWORD = "As1412as"D;
+const WOLF_PASSWORD = "As1412as";
 
 // ============================================================
 // Login Coordinates
