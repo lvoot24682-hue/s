@@ -1,456 +1,94 @@
 name: WOLF Bot
 
-# ============================================================
-# تشغيل يدوي + تشغيل تلقائي كل 4 ساعات (24 ساعة متواصلة)
-# ============================================================
-
 on:
-
   workflow_dispatch:
 
-  schedule:
-    - cron: "0 */4 * * *"
-
-
-# ============================================================
-# نسخة WOLF واحدة فقط
-#
-# إذا بدأ تشغيل جديد:
-# يتم إلغاء التشغيل السابق مباشرة
-# ============================================================
-
-concurrency:
-
-  group: wolf-bot
-
-  cancel-in-progress: true
-
-
-# ============================================================
-# JOB
-# ============================================================
-
 jobs:
-
   wolf:
-
     runs-on: ubuntu-latest
 
-    # ========================================================
-    # أقصى مدة للـ Runner (5 ساعات تشغيل + هامش للإعداد)
-    # ========================================================
-
-    timeout-minutes: 330
-
+    timeout-minutes: 360
 
     steps:
+      # ============================================
+      # تحميل المشروع
+      # ============================================
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      # ======================================================
-      # Checkout
-      # ======================================================
-
-      - name: Checkout repository
-
-        uses: actions/checkout@v6
-
-
-      # ======================================================
+      # ============================================
       # Node.js
-      # ======================================================
-
+      # ============================================
       - name: Setup Node.js
-
-        uses: actions/setup-node@v7
-
+        uses: actions/setup-node@v4
         with:
+          node-version: 20
+          cache: npm
 
-          node-version: "20"
+      # ============================================
+      # Google Chrome الرسمي
+      # ============================================
+      - name: Install Google Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-dependencies: true
 
-
-      # ======================================================
-      # FFmpeg
-      # ======================================================
-
-      - name: Install FFmpeg
-
+      # ============================================
+      # التأكد من Chrome
+      # ============================================
+      - name: Check Chrome
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: |
+          echo "========================================"
+          echo "Google Chrome"
+          echo "========================================"
+
+          echo "Chrome path:"
+          echo "$CHROME_PATH"
 
           echo ""
-          echo "========================================"
-          echo "🎬 Installing FFmpeg"
-          echo "========================================"
-
-          sudo apt-get update
-
-          sudo apt-get install -y ffmpeg
+          echo "Chrome version:"
+          "$CHROME_PATH" --version
 
           echo ""
-          echo "========================================"
-          echo "🔎 FFmpeg version"
-          echo "========================================"
+          echo "System google-chrome:"
+          which google-chrome || true
 
-          ffmpeg -version
+          google-chrome --version || true
 
-          echo ""
-          echo "========================================"
-          echo "✅ FFmpeg installed successfully"
           echo "========================================"
 
-
-      # ======================================================
-      # Dependencies
-      # ======================================================
-
+      # ============================================
+      # تثبيت npm
+      # ============================================
       - name: Install dependencies
+        run: npm ci
 
-        run: |
-
-          echo ""
-          echo "========================================"
-          echo "📦 Installing dependencies"
-          echo "========================================"
-
-          npm install
-
-          echo ""
-          echo "========================================"
-          echo "✅ Dependencies installed"
-          echo "========================================"
-
-
-      # ======================================================
-      # Check WOLF Profile
-      # ======================================================
-
-      - name: Check WOLF Profile Secret
-
+      # ============================================
+      # تشغيل البوت
+      # ============================================
+      - name: Start WOLF
         env:
+          WOLF_EMAIL: ${{ secrets.WOLF_EMAIL }}
+          WOLF_PASSWORD: ${{ secrets.WOLF_PASSWORD }}
 
-          WOLF_PROFILE_URL: ${{ secrets.WOLF_PROFILE_URL }}
-
-        run: |
-
-          echo ""
-          echo "========================================"
-          echo "🔐 Checking WOLF Profile"
-          echo "========================================"
-
-          if [ -z "$WOLF_PROFILE_URL" ]; then
-
-            echo "❌ WOLF_PROFILE_URL is NOT available"
-
-            exit 1
-
-          fi
-
-          echo "✅ WOLF_PROFILE_URL is available"
-
-          echo "========================================"
-
-
-      # ======================================================
-      # Start WOLF
-      # ======================================================
-
-      - name: Start WOLF Bot
-
-        env:
-
-          WOLF_PROFILE_URL: ${{ secrets.WOLF_PROFILE_URL }}
+          # مسار Chrome الرسمي
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
 
         run: |
-
-          echo ""
           echo "========================================"
-          echo "🐺 WOLF BOT STARTING"
+          echo "Starting WOLF"
           echo "========================================"
 
-          echo "🕐 Start time: $(date)"
+          echo "Using Chrome:"
+          "$CHROME_PATH" --version
 
-          echo "⏱️ Maximum runtime: 5 hours"
-
-          echo "🔄 A new run every 4 hours cancels this one automatically"
-
-          echo "📱 DEVICE: web"
-
-          echo "🛡️ APP CHECK: true"
+          echo "Chrome path:"
+          echo "$CHROME_PATH"
 
           echo "========================================"
 
-
-          # ====================================================
-          # مدة تشغيل WOLF
-          # 5 ساعات (كحد أقصى/أمان لكل تشغيلة)
-          # التشغيلة التالية بعد 4 ساعات تُلغي هذه تلقائيًا
-          # عبر concurrency، فالبوت يبقى شغال 24 ساعة بدون توقف
-          # ====================================================
-
-          RUN_SECONDS=18000
-
-
-          # ====================================================
-          # Start time
-          # ====================================================
-
-          START_TIME=$(date +%s)
-
-          END_TIME=$((START_TIME + RUN_SECONDS))
-
-
-          # ====================================================
-          # Cleanup
-          # ====================================================
-
-          cleanup() {
-
-            echo ""
-            echo "========================================"
-            echo "🧹 WOLF CLEANUP"
-            echo "========================================"
-
-            echo "🛑 Stopping WOLF..."
-
-
-            # --------------------------------------------------
-            # التأكد من وجود PID
-            # --------------------------------------------------
-
-            if [ -n "$BOT_PID" ]; then
-
-              if kill -0 "$BOT_PID" 2>/dev/null; then
-
-                echo ""
-                echo "🐺 WOLF PID: $BOT_PID"
-
-                echo "📡 Sending SIGTERM..."
-
-
-                # ----------------------------------------------
-                # قتل Process Group بالكامل
-                # ----------------------------------------------
-
-                kill -TERM -- "-$BOT_PID" 2>/dev/null || true
-
-
-                # ----------------------------------------------
-                # انتظار 5 ثواني
-                # ----------------------------------------------
-
-                sleep 5
-
-
-                # ----------------------------------------------
-                # إذا بقيت العملية
-                # ----------------------------------------------
-
-                if kill -0 "$BOT_PID" 2>/dev/null; then
-
-                  echo "⚠️ WOLF is still running"
-
-                  echo "💀 Sending SIGKILL..."
-
-                  kill -KILL -- "-$BOT_PID" 2>/dev/null || true
-
-                fi
-
-              else
-
-                echo "ℹ️ WOLF process already stopped"
-
-              fi
-
-            else
-
-              echo "ℹ️ WOLF PID is not available"
-
-            fi
-
-
-            echo ""
-            echo "✅ WOLF cleanup completed"
-
-            echo "========================================"
-
-          }
-
-
-          # ====================================================
-          # Signals
-          # ====================================================
-
-          trap cleanup EXIT
-
-          trap cleanup INT
-
-          trap cleanup TERM
-
-
-          # ====================================================
-          # Start WOLF
-          # ====================================================
-
-          echo ""
-          echo "========================================"
-          echo "🚀 STARTING WOLF"
-          echo "========================================"
-
-          echo "🕐 $(date)"
-
-          echo "========================================"
-
-
-          # ====================================================
-          # تشغيل WOLF داخل Process Group منفصلة
-          # ====================================================
-
-          setsid npm start &
-
-          BOT_PID=$!
-
-
-          echo ""
-
-          echo "🐺 WOLF PID: $BOT_PID"
-
-          echo "🕐 Started: $(date)"
-
-          echo "========================================"
-
-
-          # ====================================================
-          # Monitor WOLF
-          # ====================================================
-
-          while true; do
-
-
-            # ==================================================
-            # Current time
-            # ==================================================
-
-            NOW=$(date +%s)
-
-
-            # ==================================================
-            # انتهاء الخمس ساعات
-            # ==================================================
-
-            if [ "$NOW" -ge "$END_TIME" ]; then
-
-              echo ""
-              echo "========================================"
-              echo "⏰ 5 HOURS COMPLETED"
-              echo "========================================"
-
-              echo "🕐 Current time: $(date)"
-
-              echo "🛑 Stopping WOLF..."
-
-              echo "========================================"
-
-
-              exit 0
-
-            fi
-
-
-            # ==================================================
-            # Check WOLF process
-            # ==================================================
-
-            if ! kill -0 "$BOT_PID" 2>/dev/null; then
-
-              echo ""
-              echo "========================================"
-              echo "⚠️ WOLF STOPPED UNEXPECTEDLY"
-              echo "========================================"
-
-              wait "$BOT_PID" 2>/dev/null || true
-
-              echo "❌ WOLF process is no longer running"
-
-              echo "========================================"
-
-
-              exit 1
-
-            fi
-
-
-            # ==================================================
-            # Runtime
-            # ==================================================
-
-            ELAPSED=$((NOW - START_TIME))
-
-
-            HOURS=$((ELAPSED / 3600))
-
-            MINUTES=$(((ELAPSED % 3600) / 60))
-
-            SECONDS=$((ELAPSED % 60))
-
-
-            # ==================================================
-            # Status
-            # ==================================================
-
-            echo ""
-
-            echo "🐺 WOLF is running"
-
-            echo "⏱️ Runtime: ${HOURS}h ${MINUTES}m ${SECONDS}s"
-
-            echo "🕐 $(date)"
-
-            echo "📱 DEVICE: web"
-
-            echo "🛡️ APP CHECK: true"
-
-            echo "========================================"
-
-
-            # ==================================================
-            # فحص كل 30 ثانية
-            # ==================================================
-
-            sleep 30
-
-
-          done
-
-
-      # ======================================================
-      # Final Cleanup
-      # ======================================================
-
-      - name: Final Cleanup
-
-        if: always()
-
-        run: |
-
-          echo ""
-          echo "========================================"
-          echo "🧹 FINAL CLEANUP"
-          echo "========================================"
-
-          echo "🛑 Cleaning current WOLF process..."
-
-
-          # --------------------------------------------------
-          # لا نستخدم pkill على جميع Node
-          # نعتمد على إلغاء الـ Job + cleanup السابق
-          # --------------------------------------------------
-
-          pkill -TERM -f "node check-wolf.js" 2>/dev/null || true
-
-          sleep 2
-
-          pkill -KILL -f "node check-wolf.js" 2>/dev/null || true
-
-
-          echo ""
-          echo "✅ Final cleanup completed"
-
-          echo "========================================"
+          npm start
