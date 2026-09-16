@@ -1,56 +1,78 @@
-import fs from "fs";
+import puppeteer from "puppeteer";
+import { spawn } from "child_process";
 import path from "path";
-import { chromium } from "playwright";
+import fs from "fs";
+import os from "os";
+import http from "http";
 
 // ============================================================
-// إعدادات تسجيل الدخول
+// WOLF LOGIN CONFIG
 // ============================================================
 
-const LOGIN_URL = "https://wolf.live/mna";
-const APP_URL = "https://app.wolf.live/";
+const WOLF_URL = "https://wolf.live/mna";
 
-// حجم نافذة المتصفح
-const VIEWPORT = {
-    width: 600,
-    height: 600
-};
+const CDP_PORT = 9222;
 
-// الانتظار بين كل خطوة
-const WAIT_BETWEEN_STEPS_MS = 3000;
+const WIDTH = 600;
+const HEIGHT = 600;
 
-// الانتظار بعد تحميل الصفحة وقبل أول نقرة
-const WAIT_BEFORE_FIRST_CLICK_MS = 15000;
+const WOLF_EMAIL = "mona24682@gmail.com";
+const WOLF_PASSWORD = "As1412as"D;
 
-// نفس تسلسل النقرات اللي سجّلناها بحجم نافذة 600×600
+// ============================================================
+// Login Coordinates
+// ============================================================
+
 const STEPS = [
-    { label: "نقرة 1", x: 40, y: 445, type: "click" },
-    { label: "نقرة 2", x: 556, y: 29, type: "click" },
-    { label: "نقرة 3", x: 516, y: 75, type: "click" },
-    { label: "نقرة 4", x: 176, y: 341, type: "click" },
+    {
+        label: "نقرة 1",
+        x: 40,
+        y: 445,
+        type: "click"
+    },
 
-    { label: "حقل الإيميل", x: 268, y: 127, type: "type_email" },
-    { label: "حقل الباسورد", x: 262, y: 197, type: "type_password" },
+    {
+        label: "نقرة 2",
+        x: 556,
+        y: 29,
+        type: "click"
+    },
 
-    { label: "زر الدخول", x: 243, y: 281, type: "click" }
+    {
+        label: "نقرة 3",
+        x: 516,
+        y: 75,
+        type: "click"
+    },
+
+    {
+        label: "نقرة 4",
+        x: 176,
+        y: 341,
+        type: "click"
+    },
+
+    {
+        label: "حقل الإيميل",
+        x: 268,
+        y: 127,
+        type: "email"
+    },
+
+    {
+        label: "حقل الباسورد",
+        x: 262,
+        y: 197,
+        type: "password"
+    },
+
+    {
+        label: "زر الدخول",
+        x: 243,
+        y: 281,
+        type: "click"
+    }
 ];
-
-const WOLF_EMAIL = process.env.WOLF_EMAIL || "mona24682@gmail.com";
-const WOLF_PASSWORD = process.env.WOLF_PASSWORD || "As1412as";
-
-// ============================================================
-// مجلد العمل
-// ============================================================
-
-// جلسة Chrome تُحفظ محلياً على نفس الجهاز فقط
-const WORK_DIR = path.resolve("./wolf-runtime");
-const PROFILE_DIR = path.join(WORK_DIR, "profile");
-
-// ============================================================
-// Browser
-// ============================================================
-
-let browserContext = null;
-let wolfPage = null;
 
 // ============================================================
 // Helpers
@@ -61,6 +83,7 @@ function sleep(ms) {
 }
 
 function mask(value) {
+
     if (!value) {
         return "غير موجود";
     }
@@ -81,12 +104,9 @@ function mask(value) {
 function findChrome() {
 
     const candidates = [
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
 
         "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+
         "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
 
         path.join(
@@ -100,530 +120,743 @@ function findChrome() {
 
     for (const executable of candidates) {
 
-        if (!executable) {
-            continue;
-        }
-
-        if (fs.existsSync(executable)) {
-            console.log(`🌐 Chrome: ${executable}`);
+        if (
+            executable &&
+            fs.existsSync(executable)
+        ) {
             return executable;
         }
     }
-
-    console.log(
-        "⚠️ لم يتم العثور على Google Chrome، سيُستخدم Chromium الخاص بـ Playwright."
-    );
 
     return null;
 }
 
 // ============================================================
-// Perform Interactive Login
+// Check CDP
 // ============================================================
 
-async function performLogin() {
+function isCDPAvailable() {
 
-    if (!WOLF_EMAIL || !WOLF_PASSWORD) {
+    return new Promise(resolve => {
+
+        const request = http.get(
+            `http://127.0.0.1:${CDP_PORT}/json/version`,
+            response => {
+
+                resolve(
+                    response.statusCode === 200
+                );
+            }
+        );
+
+        request.on(
+            "error",
+            () => resolve(false)
+        );
+
+        request.setTimeout(
+            1500,
+            () => {
+                request.destroy();
+                resolve(false);
+            }
+        );
+    });
+}
+
+// ============================================================
+// Wait CDP
+// ============================================================
+
+async function waitForCDP(
+    timeout = 20000
+) {
+
+    const start = Date.now();
+
+    while (
+        Date.now() - start <
+        timeout
+    ) {
+
+        if (
+            await isCDPAvailable()
+        ) {
+            return true;
+        }
+
+        await sleep(500);
+    }
+
+    return false;
+}
+
+// ============================================================
+// Start Real Chrome
+// ============================================================
+
+async function startChrome() {
+
+    const chromePath =
+        findChrome();
+
+    if (!chromePath) {
+
         throw new Error(
-            "❌ لازم تحدد WOLF_EMAIL و WOLF_PASSWORD كمتغيرات بيئة قبل التشغيل."
+            "❌ لم يتم العثور على Google Chrome."
         );
     }
 
+    const profileDir =
+        path.join(
+            os.tmpdir(),
+            "wolf-real-chrome-profile"
+        );
+
+    fs.mkdirSync(
+        profileDir,
+        {
+            recursive: true
+        }
+    );
+
     console.log("");
-    console.log("========================================");
-    console.log("🔑 تسجيل دخول تلقائي");
-    console.log("========================================");
+    console.log(
+        "🚀 تشغيل Google Chrome الحقيقي..."
+    );
 
-    fs.mkdirSync(WORK_DIR, {
-        recursive: true
-    });
+    console.log(
+        `🌐 ${chromePath}`
+    );
 
-    const executablePath = findChrome();
+    const chrome =
+        spawn(
+            chromePath,
+            [
+                `--remote-debugging-port=${CDP_PORT}`,
 
-    const launchOptions = {
-        headless: true,
+                `--user-data-dir=${profileDir}`,
 
-        viewport: VIEWPORT,
+                `--window-size=${WIDTH},${HEIGHT}`,
 
-        args: [
-            `--window-size=${VIEWPORT.width},${VIEWPORT.height}`
-        ]
-    };
+                "--lang=ar-SA",
 
-    if (executablePath) {
-        launchOptions.executablePath = executablePath;
+                "--accept-lang=ar-SA,ar,en-US,en",
+
+                "--no-first-run",
+
+                "--no-default-browser-check",
+
+                "--disable-session-crashed-bubble",
+
+                WOLF_URL
+            ],
+            {
+                detached: true,
+                stdio: "ignore"
+            }
+        );
+
+    chrome.unref();
+
+    console.log(
+        "⏳ انتظار Chrome..."
+    );
+
+    const ready =
+        await waitForCDP();
+
+    if (!ready) {
+
+        throw new Error(
+            "❌ Chrome لم يفتح CDP على 9222."
+        );
     }
 
-    // ========================================================
-    // تشغيل Chrome
-    // ========================================================
-
-    console.log("🚀 تشغيل المتصفح...");
-
-    browserContext = await chromium.launchPersistentContext(
-        PROFILE_DIR,
-        launchOptions
-    );
-
-    const pages = browserContext.pages();
-
-    wolfPage =
-        pages.length > 0
-            ? pages[0]
-            : await browserContext.newPage();
-
-    // ========================================================
-    // فتح صفحة الدخول
-    // ========================================================
-
-    console.log(`🌐 فتح صفحة الدخول: ${LOGIN_URL}`);
-
-    await wolfPage.goto(LOGIN_URL, {
-        waitUntil: "domcontentloaded",
-        timeout: 120000
-    });
-
-    console.log("✅ تم تحميل صفحة الدخول.");
-
-    // ========================================================
-    // انتظار الصفحة قبل أول نقرة
-    // ========================================================
-
-    console.log("");
-    console.log("⏳ انتظار الصفحة قبل بدء النقر...");
     console.log(
-        `⏳ سيتم الانتظار ${WAIT_BEFORE_FIRST_CLICK_MS / 1000} ثانية...`
+        "✅ Chrome جاهز"
+    );
+}
+
+// ============================================================
+// Get WOLF Page
+// ============================================================
+
+async function getWolfPage(
+    browser
+) {
+
+    let pages =
+        await browser.pages();
+
+    console.log("");
+    console.log(
+        `📄 عدد التبويبات: ${pages.length}`
     );
 
-    await sleep(WAIT_BEFORE_FIRST_CLICK_MS);
-
-    console.log("✅ انتهى انتظار تحميل الصفحة.");
-    console.log("🖱️ بدء تسلسل النقرات...");
-    console.log("");
-
-    // ========================================================
-    // تنفيذ خطوات تسجيل الدخول
-    // ========================================================
-
-    for (let i = 0; i < STEPS.length; i++) {
-
-        const step = STEPS[i];
+    for (
+        let i = 0;
+        i < pages.length;
+        i++
+    ) {
 
         console.log(
-            `الخطوة ${i + 1}/${STEPS.length}: ${step.label} ` +
-            `(x=${step.x}, y=${step.y})`
+            `   ${i + 1}. ${pages[i].url()}`
+        );
+    }
+
+    let page =
+        pages.find(
+            p =>
+                p.url().includes(
+                    "wolf.live"
+                )
         );
 
-        // النقرة
-        await wolfPage.mouse.click(
+    if (!page) {
+
+        page =
+            pages.length
+                ? pages[0]
+                : await browser.newPage();
+
+        await page.goto(
+            WOLF_URL,
+            {
+                waitUntil:
+                    "domcontentloaded",
+                timeout: 60000
+            }
+        );
+    }
+
+    return page;
+}
+
+// ============================================================
+// Coordinate Calculation
+// ============================================================
+
+async function calculateCoordinates(
+    page,
+    x,
+    y
+) {
+
+    const info =
+        await page.evaluate(
+            () => ({
+                width:
+                    window.innerWidth,
+
+                height:
+                    window.innerHeight
+            })
+        );
+
+    let newX = x;
+    let newY = y;
+
+    if (
+        info.width !== WIDTH ||
+        info.height !== HEIGHT
+    ) {
+
+        newX =
+            Math.round(
+                x *
+                info.width /
+                WIDTH
+            );
+
+        newY =
+            Math.round(
+                y *
+                info.height /
+                HEIGHT
+            );
+    }
+
+    return {
+        x: newX,
+        y: newY
+    };
+}
+
+// ============================================================
+// Click
+// ============================================================
+
+async function clickAt(
+    page,
+    step
+) {
+
+    const pos =
+        await calculateCoordinates(
+            page,
             step.x,
             step.y
         );
 
-        // ====================================================
-        // إدخال الإيميل
-        // ====================================================
-
-        if (step.type === "type_email") {
-
-            console.log("⌨️ كتابة الإيميل...");
-
-            await wolfPage.keyboard.type(
-                WOLF_EMAIL
-            );
-        }
-
-        // ====================================================
-        // إدخال كلمة المرور
-        // ====================================================
-
-        else if (step.type === "type_password") {
-
-            console.log("🔐 كتابة كلمة المرور...");
-
-            await wolfPage.keyboard.type(
-                WOLF_PASSWORD
-            );
-        }
-
-        // ====================================================
-        // انتظار بين الخطوات
-        // ====================================================
-
-        if (i < STEPS.length - 1) {
-
-            console.log(
-                `⏳ انتظار ${WAIT_BETWEEN_STEPS_MS / 1000} ثوانٍ...`
-            );
-
-            await sleep(
-                WAIT_BETWEEN_STEPS_MS
-            );
-        }
-    }
-
-    // ========================================================
-    // بعد إرسال بيانات الدخول
-    // ========================================================
-
     console.log("");
-    console.log("✅ تم إرسال بيانات الدخول.");
+    console.log(
+        `🖱️ ${step.label}`
+    );
 
-    console.log("⏳ انتظار اكتمال تسجيل الدخول...");
+    console.log(
+        `📍 X=${pos.x} Y=${pos.y}`
+    );
 
-    await sleep(5000);
+    await page.mouse.move(
+        pos.x,
+        pos.y,
+        {
+            steps: 10
+        }
+    );
 
-    // ========================================================
-    // فتح APP_URL
-    // ========================================================
+    await sleep(300);
 
-    console.log(`🌐 فتح ${APP_URL} لاستخراج الجلسة...`);
+    await page.mouse.click(
+        pos.x,
+        pos.y
+    );
 
-    await wolfPage.goto(APP_URL, {
-        waitUntil: "domcontentloaded",
-        timeout: 120000
-    });
+    console.log(
+        "✅ تم النقر"
+    );
 
-    console.log("⏳ انتظار تحميل جلسة WOLF...");
-
-    await sleep(10000);
-
-    console.log("✅ الجلسة جاهزة.");
-
-    console.log("========================================");
+    await sleep(1500);
 }
 
 // ============================================================
-// Extract LocalStorage + IndexedDB
+// Type
 // ============================================================
 
-async function extractCredentialsFromChrome() {
+async function typeAt(
+    page,
+    step,
+    value
+) {
+
+    const pos =
+        await calculateCoordinates(
+            page,
+            step.x,
+            step.y
+        );
 
     console.log("");
-    console.log("========================================");
-    console.log("🔐 قراءة WOLF credentials من Chrome");
-    console.log("========================================");
+    console.log(
+        `⌨️ ${step.label}`
+    );
 
-    let data = null;
+    console.log(
+        `📍 X=${pos.x} Y=${pos.y}`
+    );
 
-    // ========================================================
-    // قراءة LocalStorage
-    // ========================================================
+    await page.mouse.click(
+        pos.x,
+        pos.y
+    );
 
-    try {
+    await sleep(300);
 
-        data = await wolfPage.evaluate(() => {
+    await page.keyboard.down(
+        "Control"
+    );
 
-            const result = {};
+    await page.keyboard.press("A");
 
-            for (
-                let i = 0;
-                i < localStorage.length;
-                i++
-            ) {
+    await page.keyboard.up(
+        "Control"
+    );
 
-                const key = localStorage.key(i);
+    await page.keyboard.press(
+        "Backspace"
+    );
 
-                if (!key) {
-                    continue;
-                }
+    await page.keyboard.type(
+        value,
+        {
+            delay: 50
+        }
+    );
 
-                result[key] =
-                    localStorage.getItem(key);
-            }
+    console.log(
+        "✅ تم إدخال البيانات"
+    );
 
-            return result;
-        });
+    await sleep(1000);
+}
 
-    } catch (error) {
+// ============================================================
+// Perform Login
+// ============================================================
+
+async function performLogin(
+    page
+) {
+
+    if (
+        !WOLF_EMAIL ||
+        !WOLF_PASSWORD
+    ) {
 
         throw new Error(
-            `❌ فشل قراءة LocalStorage: ${error.message}`
+            "❌ WOLF_EMAIL أو WOLF_PASSWORD غير موجود."
         );
     }
 
-    // ========================================================
-    // استخراج v3APIToken
-    // ========================================================
+    console.log("");
+    console.log(
+        "========================================"
+    );
 
-    const token =
-        data?.v3APIToken || null;
+    console.log(
+        "🔐 بدء تسجيل الدخول"
+    );
 
-    let appCheckToken = null;
+    console.log(
+        "========================================"
+    );
 
-    // ========================================================
-    // قراءة Firebase App Check
-    // ========================================================
-
-    const MAX_ATTEMPTS = 6;
-    const RETRY_DELAY_MS = 5000;
+    console.log(
+        `📧 Email: ${mask(WOLF_EMAIL)}`
+    );
 
     for (
+        const step of STEPS
+    ) {
+
+        if (
+            step.type === "email"
+        ) {
+
+            await typeAt(
+                page,
+                step,
+                WOLF_EMAIL
+            );
+
+        } else if (
+            step.type === "password"
+        ) {
+
+            await typeAt(
+                page,
+                step,
+                WOLF_PASSWORD
+            );
+
+        } else {
+
+            await clickAt(
+                page,
+                step
+            );
+        }
+    }
+
+    console.log("");
+    console.log(
+        "✅ تم تنفيذ جميع خطوات الدخول"
+    );
+}
+
+// ============================================================
+// Read Credentials
+// ============================================================
+
+async function readCredentials(
+    page
+) {
+
+    console.log("");
+    console.log(
+        "========================================"
+    );
+
+    console.log(
+        "🔐 قراءة WOLF credentials"
+    );
+
+    console.log(
+        "========================================"
+    );
+
+    let lastData = null;
+
+    // نعطي WOLF وقتًا لتحديث localStorage
+    for (
         let attempt = 1;
-        attempt <= MAX_ATTEMPTS && !appCheckToken;
+        attempt <= 10;
         attempt++
     ) {
 
-        if (attempt > 1) {
+        lastData =
+            await page.evaluate(
+                () => {
 
-            console.log(
-                `🔎 محاولة ${attempt}/${MAX_ATTEMPTS}: ` +
-                "انتظار توليد appCheckToken الحقيقي..."
-            );
+                    const result = {};
 
-            await sleep(
-                RETRY_DELAY_MS
-            );
-        }
+                    for (
+                        let i = 0;
+                        i < localStorage.length;
+                        i++
+                    ) {
 
-        try {
+                        const key =
+                            localStorage.key(i);
 
-            const appCheckRecords =
-                await wolfPage.evaluate(
-                    async () => {
-
-                        const dbName =
-                            "firebase-app-check-database";
-
-                        const storeName =
-                            "firebase-app-check-store";
-
-                        // ------------------------------------
-                        // فتح IndexedDB
-                        // ------------------------------------
-
-                        const db =
-                            await new Promise(
-                                (resolve, reject) => {
-
-                                    const req =
-                                        indexedDB.open(
-                                            dbName
-                                        );
-
-                                    req.onsuccess = () =>
-                                        resolve(
-                                            req.result
-                                        );
-
-                                    req.onerror = () =>
-                                        reject(
-                                            req.error
-                                        );
-                                }
-                            );
-
-                        // ------------------------------------
-                        // التأكد من وجود Store
-                        // ------------------------------------
-
-                        if (
-                            !db.objectStoreNames.contains(
-                                storeName
-                            )
-                        ) {
-
-                            db.close();
-
-                            return [];
+                        if (!key) {
+                            continue;
                         }
 
-                        // ------------------------------------
-                        // قراءة السجلات
-                        // ------------------------------------
-
-                        const tx =
-                            db.transaction(
-                                storeName,
-                                "readonly"
+                        result[key] =
+                            localStorage.getItem(
+                                key
                             );
-
-                        const store =
-                            tx.objectStore(
-                                storeName
-                            );
-
-                        const records =
-                            await new Promise(
-                                (resolve, reject) => {
-
-                                    const r =
-                                        store.getAll();
-
-                                    r.onsuccess = () =>
-                                        resolve(
-                                            r.result
-                                        );
-
-                                    r.onerror = () =>
-                                        reject(
-                                            r.error
-                                        );
-                                }
-                            );
-
-                        db.close();
-
-                        return records;
                     }
-                );
 
-            // =================================================
-            // معالجة النتائج
-            // =================================================
+                    return result;
+                }
+            );
 
-            if (
-                Array.isArray(appCheckRecords) &&
-                appCheckRecords.length > 0
-            ) {
+        const token =
+            lastData?.v3APIToken;
 
-                console.log(
-                    `📋 firebase-app-check-store يحتوي ` +
-                    `${appCheckRecords.length} سجل.`
-                );
+        const appCheckToken =
+            lastData?.appCheckToken;
 
-                // عادة يكون السجل:
-                //
-                // {
-                //   compositeKey,
-                //   token,
-                //   expireTimeMillis
-                // }
+        console.log(
+            `🔎 محاولة ${attempt}/10`
+        );
 
-                const record =
-                    appCheckRecords.find(
-                        r => r?.token
-                    ) ||
-                    appCheckRecords[0];
+        console.log(
+            `   v3APIToken: ${
+                token
+                    ? mask(token)
+                    : "غير موجود"
+            }`
+        );
 
-                appCheckToken =
-                    record?.token || null;
-            }
+        console.log(
+            `   appCheckToken: ${
+                appCheckToken
+                    ? mask(appCheckToken)
+                    : "غير موجود"
+            }`
+        );
 
-        } catch (error) {
+        if (
+            token &&
+            appCheckToken
+        ) {
 
             console.log(
-                `⚠️ تعذر فحص firebase-app-check-store: ` +
-                `${error.message}`
+                "✅ تم العثور على جميع credentials"
             );
+
+            return {
+                token:
+                    String(token).trim(),
+
+                appCheckToken:
+                    String(
+                        appCheckToken
+                    ).trim(),
+
+                device: "web",
+
+                isAppCheckEnabled:
+                    true
+            };
         }
+
+        await sleep(3000);
     }
 
-    // ========================================================
-    // التحقق من App Check
-    // ========================================================
-
-    if (!appCheckToken) {
-
-        console.log(
-            "💡 لم يتولّد appCheckToken تلقائياً — " +
-            "قد يحتاج الموقع طلب API فعلي ليولّده."
-        );
-
-    } else {
-
-        console.log(
-            "✅ تم العثور على appCheckToken الحقيقي " +
-            "من firebase-app-check-store."
-        );
-    }
-
-    // ========================================================
-    // التحقق من v3APIToken
-    // ========================================================
-
-    if (!token) {
-
-        console.log(
-            "❌ لم يتم العثور على v3APIToken"
-        );
-
-        console.log(
-            "📍 تأكد أن تسجيل الدخول تم بنجاح."
-        );
-
-        throw new Error(
-            "لم يتم العثور على v3APIToken بعد تسجيل الدخول"
-        );
-    }
-
-    // ========================================================
-    // التحقق من App Check Token
-    // ========================================================
-
-    if (!appCheckToken) {
-
-        console.log(
-            "❌ لم يتم العثور على appCheckToken " +
-            "(لا بـ localStorage ولا IndexedDB)"
-        );
-
-        throw new Error(
-            "لم يتم العثور على appCheckToken بعد تسجيل الدخول"
-        );
-    }
-
-    // ========================================================
-    // عرض البيانات بشكل مخفي
-    // ========================================================
-
-    console.log(
-        `🔐 v3APIToken: ${mask(token)} (${token.length})`
+    throw new Error(
+        "❌ لم يتم العثور على v3APIToken و appCheckToken."
     );
-
-    console.log(
-        `🛡️ appCheckToken: ` +
-        `${mask(appCheckToken)} (${appCheckToken.length})`
-    );
-
-    console.log("========================================");
-
-    // ========================================================
-    // إرجاع credentials
-    // ========================================================
-
-    return {
-
-        token: String(token).trim(),
-
-        appCheckToken:
-            String(appCheckToken).trim(),
-
-        device: "web",
-
-        isAppCheckEnabled: true
-    };
 }
 
 // ============================================================
-// Main Loader
+// Load Session
 // ============================================================
 
 export async function loadSession() {
 
     console.log("");
-    console.log("========================================");
-    console.log("🐺 WOLF Login Loader");
-    console.log("========================================");
+    console.log(
+        "🐺 WOLF LOGIN LOADER"
+    );
 
-    // تسجيل الدخول
-    await performLogin();
+    // --------------------------------------------------------
+    // Chrome
+    // --------------------------------------------------------
 
-    // استخراج التوكنات
+    if (
+        !(await isCDPAvailable())
+    ) {
+
+        await startChrome();
+
+    } else {
+
+        console.log(
+            "✅ Chrome/CDP يعمل مسبقًا"
+        );
+    }
+
+    // --------------------------------------------------------
+    // Puppeteer -> Real Chrome
+    // --------------------------------------------------------
+
+    console.log(
+        "🔌 الاتصال بـ Google Chrome..."
+    );
+
+    const browser =
+        await puppeteer.connect({
+            browserURL:
+                `http://127.0.0.1:${CDP_PORT}`,
+
+            defaultViewport: null
+        });
+
+    console.log(
+        "✅ تم الاتصال بـ Chrome الحقيقي"
+    );
+
+    // --------------------------------------------------------
+    // Page
+    // --------------------------------------------------------
+
+    const page =
+        await getWolfPage(
+            browser
+        );
+
+    // --------------------------------------------------------
+    // Make sure WOLF page
+    // --------------------------------------------------------
+
+    if (
+        !page.url().includes(
+            "wolf.live"
+        )
+    ) {
+
+        await page.goto(
+            WOLF_URL,
+            {
+                waitUntil:
+                    "domcontentloaded",
+                timeout: 60000
+            }
+        );
+    }
+
+    // --------------------------------------------------------
+    // Viewport
+    // --------------------------------------------------------
+
+    try {
+
+        await page.setViewport({
+            width: WIDTH,
+            height: HEIGHT,
+            deviceScaleFactor: 1
+        });
+
+    } catch {}
+
+    // --------------------------------------------------------
+    // Language
+    // --------------------------------------------------------
+
+    try {
+
+        await page.setExtraHTTPHeaders({
+            "Accept-Language":
+                "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7"
+        });
+
+    } catch {}
+
+    console.log(
+        "🌐 WOLF: " + page.url()
+    );
+
+    console.log(
+        "🇸🇦 اللغة: العربية"
+    );
+
+    console.log(
+        "⏳ انتظار تحميل WOLF..."
+    );
+
+    await sleep(5000);
+
+    // --------------------------------------------------------
+    // Login
+    // --------------------------------------------------------
+
+    await performLogin(
+        page
+    );
+
+    // --------------------------------------------------------
+    // Wait
+    // --------------------------------------------------------
+
+    console.log("");
+    console.log(
+        "⏳ انتظار اكتمال تسجيل الدخول..."
+    );
+
+    await sleep(10000);
+
+    // --------------------------------------------------------
+    // Credentials
+    // --------------------------------------------------------
+
     const credentials =
-        await extractCredentialsFromChrome();
+        await readCredentials(
+            page
+        );
+
+    console.log("");
+    console.log(
+        "========================================"
+    );
+
+    console.log(
+        "✅ WOLF LOGIN SUCCESS"
+    );
+
+    console.log(
+        `🔐 v3APIToken: ${mask(credentials.token)}`
+    );
+
+    console.log(
+        `🛡️ appCheckToken: ${mask(credentials.appCheckToken)}`
+    );
+
+    console.log(
+        "📱 Device: web"
+    );
+
+    console.log(
+        "🛡️ App Check: true"
+    );
+
+    console.log(
+        "========================================"
+    );
 
     return credentials;
-}
-
-// ============================================================
-// Optional Browser Access
-// ============================================================
-
-export function getBrowserContext() {
-    return browserContext;
-}
-
-export function getWolfPage() {
-    return wolfPage;
 }
