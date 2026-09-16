@@ -30,8 +30,8 @@ const CHECK_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_OCCUPANTS_TO_JOIN = 1;
 
 // GitHub Secrets / Environment Variables
-const WOLF_EMAIL = process.env.WOLF_EMAIL;
-const WOLF_PASSWORD = process.env.WOLF_PASSWORD;
+const WOLF_EMAIL = "mona24682@gmail.com";
+const WOLF_PASSWORD = "As1412as";
 
 // ============================================================
 // LOGIN COORDINATES
