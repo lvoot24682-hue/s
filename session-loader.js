@@ -7,7 +7,7 @@ import { chromium } from "playwright";
 // ============================================================
 
 const LOGIN_URL = "https://wolf.live/mna";
-const APP_URL = "https://app.wolf.live/mna";
+const APP_URL = "https://app.wolf.live/";
 
 const VIEWPORT = { width: 600, height: 600 };
 
@@ -229,76 +229,80 @@ async function extractCredentialsFromChrome() {
         throw new Error(`❌ فشل قراءة LocalStorage: ${error.message}`);
     }
 
-    console.log(`📋 مفاتيح localStorage الموجودة (${Object.keys(data || {}).length}):`);
-    console.log(Object.keys(data || {}).join(", ") || "(فارغ)");
-
     const token = data?.v3APIToken || null;
-    let appCheckToken = data?.appCheckToken || null;
+    let appCheckToken = null;
 
     // ------------------------------------------------------
-    // fallback: Firebase App Check غالباً يخزّن التوكن بـ IndexedDB
+    // App Check الحقيقي يُخزَّن تحديداً بـ:
+    //   IndexedDB > firebase-app-check-database > firebase-app-check-store
+    // وقد يحتاج وقت إضافي لين يتولّد (يتولّد عند أول طلب API يحتاجه).
+    // نعيد المحاولة عدة مرات بدل قنص أي حقل "token" عشوائي بالداتا.
     // ------------------------------------------------------
 
-    if (!appCheckToken) {
+    const MAX_ATTEMPTS = 6;
+    const RETRY_DELAY_MS = 5000;
 
-        console.log("🔎 appCheckToken غير موجود بـ localStorage، جاري البحث بـ IndexedDB...");
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS && !appCheckToken; attempt++) {
+
+        if (attempt > 1) {
+            console.log(
+                `🔎 محاولة ${attempt}/${MAX_ATTEMPTS}: انتظار توليد appCheckToken الحقيقي...`
+            );
+            await sleep(RETRY_DELAY_MS);
+        }
 
         try {
 
-            const indexedDbDump = await wolfPage.evaluate(async () => {
+            const appCheckRecords = await wolfPage.evaluate(async () => {
 
-                const dbs = await indexedDB.databases();
-                const output = {};
+                const dbName = "firebase-app-check-database";
+                const storeName = "firebase-app-check-store";
 
-                for (const dbInfo of dbs) {
+                const db = await new Promise((resolve, reject) => {
+                    const req = indexedDB.open(dbName);
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => reject(req.error);
+                });
 
-                    try {
-
-                        const db = await new Promise((resolve, reject) => {
-                            const req = indexedDB.open(dbInfo.name);
-                            req.onsuccess = () => resolve(req.result);
-                            req.onerror = () => reject(req.error);
-                        });
-
-                        for (const storeName of db.objectStoreNames) {
-
-                            const tx = db.transaction(storeName, "readonly");
-                            const store = tx.objectStore(storeName);
-
-                            const records = await new Promise((resolve, reject) => {
-                                const r = store.getAll();
-                                r.onsuccess = () => resolve(r.result);
-                                r.onerror = () => reject(r.error);
-                            });
-
-                            output[`${dbInfo.name}/${storeName}`] = records;
-                        }
-
-                        db.close();
-
-                    } catch (e) {
-                        output[dbInfo.name] = `خطأ: ${e.message}`;
-                    }
+                if (!db.objectStoreNames.contains(storeName)) {
+                    db.close();
+                    return [];
                 }
 
-                return output;
+                const tx = db.transaction(storeName, "readonly");
+                const store = tx.objectStore(storeName);
+
+                const records = await new Promise((resolve, reject) => {
+                    const r = store.getAll();
+                    r.onsuccess = () => resolve(r.result);
+                    r.onerror = () => reject(r.error);
+                });
+
+                db.close();
+                return records;
             });
 
-            console.log("📋 محتوى IndexedDB (تشخيصي):");
-            console.log(JSON.stringify(indexedDbDump, null, 2).slice(0, 3000));
+            if (Array.isArray(appCheckRecords) && appCheckRecords.length > 0) {
 
-            // بحث تلقائي عن أي قيمة تشبه توكن App Check داخل النتائج
-            const flatText = JSON.stringify(indexedDbDump);
-            const match = flatText.match(/"token"\s*:\s*"([^"]{20,})"/);
+                console.log(
+                    `📋 firebase-app-check-store يحتوي ${appCheckRecords.length} سجل.`
+                );
 
-            if (match) {
-                appCheckToken = match[1];
-                console.log("✅ تم العثور على مرشّح appCheckToken داخل IndexedDB.");
+                // كل سجل عادة بشكل { compositeKey, token, expireTimeMillis }
+                const record = appCheckRecords.find(r => r?.token) || appCheckRecords[0];
+
+                appCheckToken = record?.token || null;
             }
 
         } catch (error) {
-            console.log(`⚠️ تعذر فحص IndexedDB: ${error.message}`);
+            console.log(`⚠️ تعذر فحص firebase-app-check-store: ${error.message}`);
         }
+    }
+
+    if (!appCheckToken) {
+        console.log("💡 لم يتولّد appCheckToken تلقائياً — قد يحتاج الموقع طلب API فعلي ليولّده.");
+    } else {
+        console.log("✅ تم العثور على appCheckToken الحقيقي من firebase-app-check-store.");
     }
 
     if (!token) {
