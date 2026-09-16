@@ -1,1293 +1,584 @@
 import puppeteer from "puppeteer";
-import wolfjs from "wolf.js";
-import { io } from "socket.io-client";
+import fs from "fs";
 
-// ============================================================
-// WOLF
-// ============================================================
+const WOLF_URL = "https://wolf.live/mna";
 
-const { WOLF, OnlineState } = wolfjs;
-
-// ============================================================
-// إعدادات
-// ============================================================
-
-const GROUP_ID = 18432094;
-
-const WATCHED_SUBSCRIBER_IDS = [
-    51660277,
-    35543686,
-    80014666,
-    16327118,
-    5507
-];
-
-const LEAVE_COMMAND = "!كات نزول";
-const JOIN_COMMAND = "!كات صعود";
-
-const CHECK_INTERVAL_MS = 10 * 60 * 1000;
-
-const MAX_OCCUPANTS_TO_JOIN = 1;
-
-const AUTHORIZATION_TIMEOUT_MS = 30 * 1000;
-
-// ============================================================
-// Chrome
-// ============================================================
-
+const EMAIL = process.env.WOLF_EMAIL;
+const PASSWORD = process.env.WOLF_PASSWORD;
 const CHROME_PATH = process.env.CHROME_PATH;
 
-if (!CHROME_PATH) {
-    console.error("❌ CHROME_PATH غير موجود");
-    console.error("❌ يجب تشغيل البرنامج من GitHub Actions بعد تثبيت Chrome");
-    process.exit(1);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let browser;
+let page;
+
+function logLine() {
+    console.log("========================================");
 }
 
-// ============================================================
-// متغيرات
-// ============================================================
+async function saveScreenshot(name) {
+    try {
+        await page.screenshot({
+            path: `/tmp/${name}.png`,
+            fullPage: false
+        });
 
-let browser = null;
-let page = null;
-
-let service = null;
-let socket = null;
-
-let monitorTimer = null;
-
-let autoCheckEnabled = true;
-let currentSlotId = null;
-
-let shuttingDown = false;
-
-// ============================================================
-// أدوات
-// ============================================================
-
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+        console.log(`📸 تم حفظ الصورة: /tmp/${name}.png`);
+    } catch (err) {
+        console.log("⚠️ فشل حفظ الصورة:", err.message);
+    }
 }
 
-// ============================================================
-// تنظيف النصوص
-// ============================================================
+async function printBrowserInfo() {
+    logLine();
+    console.log("🔎 معلومات Chrome");
+    logLine();
 
-function normalizeText(value) {
-    if (value === null || value === undefined) {
-        return "";
+    console.log("CHROME_PATH:");
+    console.log(CHROME_PATH || "غير محدد");
+
+    console.log("");
+
+    try {
+        console.log("Browser version:");
+        console.log(await browser.version());
+    } catch (err) {
+        console.log("❌ تعذر قراءة إصدار Chrome:", err.message);
     }
 
-    return String(value).trim();
-}
-
-// ============================================================
-// قراءة sender ID
-// ============================================================
-
-function getSenderId(data) {
-    return (
-        data?.sourceSubscriberId ??
-        data?.senderId ??
-        data?.sender?.id ??
-        data?.subscriberId ??
-        data?.sourceSubscriber?.id ??
-        data?.message?.senderId ??
-        data?.message?.sender?.id ??
-        null
-    );
-}
-
-// ============================================================
-// قراءة الرسالة
-// ============================================================
-
-function getMessageText(data) {
-    return normalizeText(
-        data?.body ??
-        data?.text ??
-        data?.message ??
-        data?.message?.body ??
-        data?.message?.text ??
-        data?.content ??
-        ""
-    );
-}
-
-// ============================================================
-// تشغيل Chrome الرسمي
-// ============================================================
-
-async function startChrome() {
     console.log("");
-    console.log("========================================");
-    console.log("🌐 تشغيل Google Chrome الرسمي");
-    console.log("========================================");
-
-    console.log("Chrome path:");
-    console.log(CHROME_PATH);
-
-    console.log("");
-
-    browser = await puppeteer.launch({
-        executablePath: CHROME_PATH,
-
-        headless: true,
-
-        defaultViewport: {
-            width: 600,
-            height: 600,
-            deviceScaleFactor: 1
-        },
-
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-
-            "--window-size=600,600",
-
-            "--lang=ar-SA",
-            "--accept-lang=ar-SA,ar,en-US,en",
-
-            "--no-first-run",
-            "--no-default-browser-check",
-
-            "--disable-background-networking",
-
-            "--disable-popup-blocking",
-
-            "--disable-notifications",
-
-            "--disable-features=Translate",
-
-            "--disable-session-crashed-bubble"
-        ]
-    });
-
-    console.log("✅ تم تشغيل Google Chrome");
-
-    console.log(
-        "Chrome version:",
-        await browser.version()
-    );
-
-    const pages = await browser.pages();
-
-    page = pages[0];
-
-    if (!page) {
-        page = await browser.newPage();
-    }
-
-    await page.setViewport({
-        width: 600,
-        height: 600,
-        deviceScaleFactor: 1
-    });
-
-    await page.setExtraHTTPHeaders({
-        "Accept-Language": "ar-SA,ar;q=0.9,en-US;q=0.8,en;q=0.7"
-    });
-
-    page.on("console", msg => {
-        const text = msg.text();
-
-        if (
-            text.includes("WOLF") ||
-            text.includes("wolf") ||
-            text.includes("connection") ||
-            text.includes("AppCheck")
-        ) {
-            console.log(`[PAGE] ${text}`);
-        }
-    });
-
-    page.on("pageerror", error => {
-        console.error("⚠️ Page error:", error.message);
-    });
-
-    page.on("error", error => {
-        console.error("⚠️ Browser page error:", error.message);
-    });
-}
-
-// ============================================================
-// فتح WOLF
-// ============================================================
-
-async function openWolf() {
-    console.log("");
-    console.log("🌐 فتح WOLF...");
-
-    await page.goto(
-        "https://wolf.live/mna",
-        {
-            waitUntil: "domcontentloaded",
-            timeout: 120000
-        }
-    );
-
-    console.log("✅ WOLF opened");
-
-    await sleep(5000);
 
     const info = await page.evaluate(() => ({
+        userAgent: navigator.userAgent,
+        webdriver: navigator.webdriver,
         innerWidth: window.innerWidth,
         innerHeight: window.innerHeight,
         outerWidth: window.outerWidth,
         outerHeight: window.outerHeight,
-        dpr: window.devicePixelRatio,
-        url: location.href,
-        userAgent: navigator.userAgent
+        devicePixelRatio: window.devicePixelRatio,
+        url: location.href
     }));
 
-    console.log("");
-    console.log("📐 معلومات الصفحة");
-    console.log("innerWidth :", info.innerWidth);
-    console.log("innerHeight:", info.innerHeight);
-    console.log("outerWidth :", info.outerWidth);
-    console.log("outerHeight:", info.outerHeight);
-    console.log("DPR        :", info.dpr);
-    console.log("URL        :", info.url);
-
-    console.log("");
-    console.log("🌐 Browser:");
+    console.log("User Agent:");
     console.log(info.userAgent);
+
+    console.log("");
+    console.log("navigator.webdriver:", info.webdriver);
+    console.log("innerWidth:", info.innerWidth);
+    console.log("innerHeight:", info.innerHeight);
+    console.log("outerWidth:", info.outerWidth);
+    console.log("outerHeight:", info.outerHeight);
+    console.log("DPR:", info.devicePixelRatio);
+    console.log("URL:", info.url);
+
+    logLine();
 }
 
-// ============================================================
-// تنفيذ النقرة
-// ============================================================
+async function printPageText() {
+    try {
+        const text = await page.evaluate(() => {
+            return document.body?.innerText || "";
+        });
 
-async function clickAt(x, y) {
-    await page.mouse.click(x, y);
-    await sleep(700);
+        console.log("");
+        console.log("📄 النص الظاهر في الصفحة:");
+        console.log("----------------------------------------");
+        console.log(text.slice(0, 5000));
+        console.log("----------------------------------------");
+    } catch (err) {
+        console.log("⚠️ تعذر قراءة نص الصفحة:", err.message);
+    }
 }
 
-// ============================================================
-// الكتابة
-// ============================================================
+async function inspectInputs() {
+    try {
+        const inputs = await page.evaluate(() => {
+            return [...document.querySelectorAll("input")].map((input, index) => ({
+                index,
+                type: input.type,
+                name: input.name,
+                placeholder: input.placeholder,
+                autocomplete: input.autocomplete,
+                ariaLabel: input.getAttribute("aria-label"),
+                visible:
+                    !!(
+                        input.offsetWidth ||
+                        input.offsetHeight ||
+                        input.getClientRects().length
+                    )
+            }));
+        });
 
-async function typeAt(x, y, text) {
-    await page.mouse.click(x, y);
+        console.log("");
+        console.log("🔎 حقول الإدخال الموجودة:");
+        console.log(JSON.stringify(inputs, null, 2));
+    } catch (err) {
+        console.log("⚠️ فشل فحص الحقول:", err.message);
+    }
+}
 
-    await sleep(300);
+async function loginWithCoordinates() {
+    if (!EMAIL || !PASSWORD) {
+        throw new Error(
+            "❌ WOLF_EMAIL أو WOLF_PASSWORD غير موجودين في GitHub Secrets"
+        );
+    }
+
+    logLine();
+    console.log("🔐 بدء خطوات تسجيل الدخول");
+    logLine();
+
+    await sleep(5000);
+
+    await saveScreenshot("wolf-login-before");
+
+    await printPageText();
+    await inspectInputs();
+
+    /*
+     * الإحداثيات التي كانت تعمل عندك محليًا.
+     * نستخدمها هنا كما هي، لكن نسجل صورة قبل وبعد
+     * حتى نعرف هل واجهة GitHub مختلفة.
+     */
+
+    console.log("");
+    console.log("🖱️ نقرة 1...");
+    await page.mouse.click(40, 445);
+    await sleep(1000);
+
+    console.log("🖱️ نقرة 2...");
+    await page.mouse.click(556, 29);
+    await sleep(1000);
+
+    console.log("🖱️ نقرة 3...");
+    await page.mouse.click(516, 75);
+    await sleep(1500);
+
+    console.log("🖱️ نقرة 4...");
+    await page.mouse.click(176, 341);
+    await sleep(1500);
+
+    await saveScreenshot("wolf-login-form");
+
+    console.log("");
+    console.log("📧 كتابة الإيميل...");
+
+    await page.mouse.click(268, 127);
 
     await page.keyboard.down("Control");
     await page.keyboard.press("A");
     await page.keyboard.up("Control");
 
-    await page.keyboard.type(text, {
-        delay: 30
+    await page.keyboard.type(EMAIL, {
+        delay: 50
     });
 
-    await sleep(500);
-}
+    await sleep(700);
 
-// ============================================================
-// تسجيل الدخول
-// ============================================================
+    console.log("🔑 كتابة الباسورد...");
 
-async function loginToWolf() {
-    const email = process.env.WOLF_EMAIL;
-    const password = process.env.WOLF_PASSWORD;
+    await page.mouse.click(262, 197);
 
-    if (!email || !password) {
-        throw new Error(
-            "❌ WOLF_EMAIL أو WOLF_PASSWORD غير موجود في GitHub Secrets"
-        );
-    }
+    await page.keyboard.down("Control");
+    await page.keyboard.press("A");
+    await page.keyboard.up("Control");
+
+    await page.keyboard.type(PASSWORD, {
+        delay: 50
+    });
+
+    await sleep(700);
+
+    await saveScreenshot("wolf-login-filled");
 
     console.log("");
-    console.log("========================================");
-    console.log("🔐 بدء تسجيل الدخول");
-    console.log("========================================");
-
-    // نقرة 1
-    console.log("🖱️ نقرة 1...");
-    await clickAt(40, 445);
-
-    // نقرة 2
-    console.log("🖱️ نقرة 2...");
-    await clickAt(556, 29);
-
-    // نقرة 3
-    console.log("🖱️ نقرة 3...");
-    await clickAt(516, 75);
-
-    // نقرة 4
-    console.log("🖱️ نقرة 4...");
-    await clickAt(176, 341);
-
-    // Email
-    console.log("📧 كتابة الإيميل...");
-    await typeAt(268, 127, email);
-
-    // Password
-    console.log("🔑 كتابة الباسورد...");
-    await typeAt(262, 197, password);
-
-    // Login
     console.log("🖱️ زر الدخول...");
-    await clickAt(243, 281);
 
-    console.log("✅ انتهت خطوات الدخول");
+    await page.mouse.click(243, 281);
 
-    console.log("⏳ انتظار اكتمال تسجيل الدخول...");
+    console.log("⏳ انتظار نتيجة تسجيل الدخول...");
 
     await sleep(10000);
+
+    await saveScreenshot("wolf-login-after");
+
+    console.log("");
+    console.log("🌐 URL بعد محاولة الدخول:");
+    console.log(await page.url());
+
+    await printPageText();
 }
 
-// ============================================================
-// قراءة LocalStorage
-// ============================================================
-
-async function readWolfStorage() {
-    console.log("");
-    console.log("========================================");
+async function readCredentials() {
+    logLine();
     console.log("🔐 قراءة WOLF credentials");
-    console.log("========================================");
+    logLine();
 
-    for (let attempt = 1; attempt <= 30; attempt++) {
-
-        console.log(`🔎 محاولة ${attempt}/30`);
+    for (let i = 1; i <= 30; i++) {
+        console.log(`🔎 محاولة ${i}/30`);
 
         const result = await page.evaluate(() => {
-
             const local = {};
 
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
+            try {
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
 
-                if (key) {
-                    local[key] = localStorage.getItem(key);
+                    if (
+                        key &&
+                        (
+                            key.toLowerCase().includes("token") ||
+                            key.toLowerCase().includes("device") ||
+                            key.toLowerCase().includes("appcheck")
+                        )
+                    ) {
+                        local[key] = localStorage.getItem(key);
+                    }
                 }
-            }
+            } catch {}
 
             const session = {};
 
-            for (let i = 0; i < sessionStorage.length; i++) {
-                const key = sessionStorage.key(i);
+            try {
+                for (let i = 0; i < sessionStorage.length; i++) {
+                    const key = sessionStorage.key(i);
 
-                if (key) {
-                    session[key] = sessionStorage.getItem(key);
+                    if (
+                        key &&
+                        (
+                            key.toLowerCase().includes("token") ||
+                            key.toLowerCase().includes("device") ||
+                            key.toLowerCase().includes("appcheck")
+                        )
+                    ) {
+                        session[key] = sessionStorage.getItem(key);
+                    }
                 }
-            }
+            } catch {}
 
             return {
-                url: location.href,
-                localKeys: Object.keys(local),
-                sessionKeys: Object.keys(session),
-
-                v3APIToken:
-                    local.v3APIToken ||
-                    session.v3APIToken ||
-                    null,
-
-                appCheckToken:
-                    local.appCheckToken ||
-                    session.appCheckToken ||
-                    local.app_check_token ||
-                    session.app_check_token ||
-                    null,
-
-                deviceToken:
-                    local.deviceToken ||
-                    session.deviceToken ||
-                    null
+                local,
+                session
             };
         });
 
+        const all = {
+            ...result.local,
+            ...result.session
+        };
+
+        const findValue = (...names) => {
+            for (const wanted of names) {
+                const key = Object.keys(all).find(
+                    (k) => k.toLowerCase() === wanted.toLowerCase()
+                );
+
+                if (key && all[key]) {
+                    return all[key];
+                }
+            }
+
+            return null;
+        };
+
+        const v3APIToken = findValue(
+            "v3APIToken",
+            "v3ApiToken",
+            "v3_api_token"
+        );
+
+        const appCheckToken = findValue(
+            "appCheckToken",
+            "app_check_token"
+        );
+
+        const deviceToken = findValue(
+            "deviceToken",
+            "device_token"
+        );
+
         console.log(
             "   v3APIToken:",
-            result.v3APIToken ? "موجود" : "غير موجود"
+            v3APIToken ? "موجود" : "غير موجود"
         );
 
         console.log(
             "   appCheckToken:",
-            result.appCheckToken ? "موجود" : "غير موجود"
+            appCheckToken ? "موجود" : "غير موجود"
         );
 
         console.log(
             "   deviceToken:",
-            result.deviceToken ? "موجود" : "غير موجود"
+            deviceToken ? "موجود" : "غير موجود"
         );
 
-        if (result.v3APIToken && result.appCheckToken) {
-
-            console.log("");
-            console.log("✅ تم الحصول على credentials");
+        if (v3APIToken) {
+            logLine();
+            console.log("✅ تم العثور على v3APIToken");
+            console.log("⚠️ لن يتم طباعة قيمة التوكن حفاظًا على الأمان");
+            logLine();
 
             return {
-                token: result.v3APIToken,
-                appCheckToken: result.appCheckToken,
-                deviceToken: result.deviceToken
+                v3APIToken,
+                appCheckToken,
+                deviceToken
             };
         }
 
         await sleep(2000);
     }
 
-    throw new Error(
-        "❌ لم يتم العثور على appCheckToken بعد 30 محاولة"
-    );
+    return null;
 }
-
-// ============================================================
-// إنشاء WOLF Service
-// ============================================================
-
-async function createWolfService(credentials) {
-
-    console.log("");
-    console.log("========================================");
-    console.log("🐺 إنشاء WOLF service");
-    console.log("========================================");
-
-    service = new WOLF();
-
-    // Token
-    service.config.framework.login.token =
-        credentials.token;
-
-    // App Check
-    service.config.framework.login.appCheckToken =
-        credentials.appCheckToken;
-
-    // Invisible
-    service.config.framework.login.onlineState =
-        OnlineState.INVISIBLE;
-
-    console.log("✅ WOLF service created");
-
-    console.log("🔐 token: موجود");
-    console.log("🛡️ appCheckToken: موجود");
-    console.log("👻 onlineState: INVISIBLE");
-}
-
-// ============================================================
-// تشغيل WOLF websocket
-// ============================================================
-
-async function initializeWolfSocket() {
-
-    console.log("");
-    console.log("========================================");
-    console.log("📡 تهيئة WOLF WebSocket");
-    console.log("========================================");
-
-    await service.websocket.init();
-
-    console.log("✅ websocket.init() completed");
-}
-
-// ============================================================
-// Socket.IO
-// ============================================================
-
-async function connectSocketIO(credentials) {
-
-    console.log("");
-    console.log("========================================");
-    console.log("📡 Socket.IO");
-    console.log("========================================");
-
-    const connection =
-        service?._frameworkConfig?.get?.("connection");
-
-    const host =
-        connection?.host ||
-        "https://v3-rc.palringo.com";
-
-    const port =
-        connection?.port ??
-        443;
-
-    const state =
-        service.config.framework.login.onlineState;
-
-    console.log("Host:", host);
-    console.log("Port:", port);
-
-    socket = io(`${host}:${port}`, {
-
-        transports: [
-            "websocket"
-        ],
-
-        reconnection: true,
-
-        reconnectionAttempts: Infinity,
-
-        reconnectionDelay: 2000,
-
-        autoConnect: false,
-
-        query: {
-
-            token:
-                credentials.token,
-
-            device:
-                "web",
-
-            state,
-
-            version:
-                connection?.version || undefined,
-
-            isAppCheckEnabled:
-                "true",
-
-            appCheckToken:
-                credentials.appCheckToken
-        }
-    });
-
-    service.websocket.socket = socket;
-
-    socket.on("connect", () => {
-
-        console.log(
-            "🟢 Socket.IO connected:",
-            socket.id
-        );
-    });
-
-    socket.on("connect_error", error => {
-
-        console.error(
-            "❌ Socket.IO connect_error:",
-            error?.message || error
-        );
-    });
-
-    socket.on("disconnect", reason => {
-
-        console.log(
-            "🔴 Socket.IO disconnected:",
-            reason
-        );
-    });
-
-    socket.onAny((eventName, data) => {
-
-        try {
-
-            const handler =
-                service?.websocket?.handlers?.[eventName];
-
-            if (
-                handler &&
-                typeof handler.process === "function"
-            ) {
-
-                handler.process(
-                    data?.body ?? data
-                );
-            }
-
-        } catch (error) {
-
-            console.error(
-                `❌ Error processing ${eventName}:`,
-                error?.message || error
-            );
-        }
-    });
-
-    socket.connect();
-
-    await waitForAuthorization();
-}
-
-// ============================================================
-// انتظار Authorization
-// ============================================================
-
-async function waitForAuthorization() {
-
-    console.log("");
-    console.log("⏳ انتظار WOLF authorization...");
-
-    const started =
-        Date.now();
-
-    while (
-        Date.now() - started <
-        AUTHORIZATION_TIMEOUT_MS
-    ) {
-
-        const subscriber =
-            service?.currentSubscriber;
-
-        if (subscriber?.id) {
-
-            console.log("");
-            console.log("========================================");
-            console.log("✅ WOLF authorization completed");
-            console.log("========================================");
-
-            console.log(
-                "Subscriber ID:",
-                subscriber.id
-            );
-
-            console.log(
-                "Subscriber name:",
-                subscriber.name ||
-                subscriber.username ||
-                "Unknown"
-            );
-
-            return;
-        }
-
-        await sleep(500);
-    }
-
-    throw new Error(
-        "❌ Timeout waiting for WOLF authorization"
-    );
-}
-
-// ============================================================
-// Stage
-// ============================================================
-
-async function getStageSlots() {
-
-    await service.stage.getAudioConfig(
-        GROUP_ID
-    );
-
-    const slots =
-        await service.stage.slot.list(
-            GROUP_ID
-        );
-
-    return slots || [];
-}
-
-// ============================================================
-// فحص Stage
-// ============================================================
-
-async function checkStageAndJoin() {
-
-    if (shuttingDown) {
-        return;
-    }
-
-    if (!autoCheckEnabled) {
-        return;
-    }
-
-    console.log("");
-    console.log("========================================");
-    console.log("🎙️ فحص Stage");
-    console.log("========================================");
-
-    try {
-
-        const slots =
-            await getStageSlots();
-
-        console.log(
-            "عدد الـ slots:",
-            slots.length
-        );
-
-        const occupiedSlots =
-            slots.filter(
-                slot =>
-                    !!slot?.occupierId
-            );
-
-        console.log(
-            "عدد الموجودين:",
-            occupiedSlots.length
-        );
-
-        // هل البوت موجود أصلاً؟
-        const myId =
-            service?.currentSubscriber?.id;
-
-        const mySlot =
-            slots.find(
-                slot =>
-                    String(slot?.occupierId) ===
-                    String(myId)
-            );
-
-        if (mySlot) {
-
-            currentSlotId =
-                mySlot.id;
-
-            console.log(
-                "✅ البوت موجود على Stage"
-            );
-
-            console.log(
-                "Slot:",
-                currentSlotId
-            );
-
-            return;
-        }
-
-        if (
-            occupiedSlots.length >
-            MAX_OCCUPANTS_TO_JOIN
-        ) {
-
-            console.log(
-                `⏸️ العدد ${occupiedSlots.length} — لن أدخل`
-            );
-
-            return;
-        }
-
-        const freeSlot =
-            slots.find(
-                slot =>
-                    !slot?.occupierId
-            );
-
-        if (!freeSlot) {
-
-            console.log(
-                "⚠️ لا يوجد Slot فاضي"
-            );
-
-            return;
-        }
-
-        console.log(
-            "🎙️ Slot فاضي:",
-            freeSlot.id
-        );
-
-        console.log(
-            "🚀 محاولة الدخول..."
-        );
-
-        await service.stage.slot.join(
-            GROUP_ID,
-            freeSlot.id
-        );
-
-        currentSlotId =
-            freeSlot.id;
-
-        console.log(
-            "✅ تم الدخول إلى Stage"
-        );
-
-        // بعد الدخول نوقف الفحص التلقائي
-        autoCheckEnabled = false;
-
-        if (monitorTimer) {
-
-            clearInterval(
-                monitorTimer
-            );
-
-            monitorTimer = null;
-        }
-
-    } catch (error) {
-
-        console.error(
-            "❌ خطأ في Stage:",
-            error?.message ||
-            error
-        );
-    }
-}
-
-// ============================================================
-// الخروج من Stage
-// ============================================================
-
-async function leaveStage() {
-
-    try {
-
-        if (!currentSlotId) {
-
-            const slots =
-                await getStageSlots();
-
-            const myId =
-                service?.currentSubscriber?.id;
-
-            const mySlot =
-                slots.find(
-                    slot =>
-                        String(slot?.occupierId) ===
-                        String(myId)
-                );
-
-            if (mySlot) {
-
-                currentSlotId =
-                    mySlot.id;
-            }
-        }
-
-        if (!currentSlotId) {
-
-            console.log(
-                "ℹ️ البوت ليس على Stage"
-            );
-
-            return;
-        }
-
-        console.log(
-            "🚪 الخروج من Stage..."
-        );
-
-        await service.stage.slot.leave(
-            GROUP_ID,
-            currentSlotId
-        );
-
-        console.log(
-            "✅ تم الخروج من Stage"
-        );
-
-        currentSlotId =
-            null;
-
-    } catch (error) {
-
-        console.error(
-            "❌ خطأ أثناء الخروج:",
-            error?.message ||
-            error
-        );
-    }
-}
-
-// ============================================================
-// دخول إجباري
-// ============================================================
-
-async function forceJoinStage() {
-
-    console.log("");
-    console.log(
-        "🚀 دخول إجباري إلى Stage"
-    );
-
-    try {
-
-        const slots =
-            await getStageSlots();
-
-        const myId =
-            service?.currentSubscriber?.id;
-
-        const mySlot =
-            slots.find(
-                slot =>
-                    String(slot?.occupierId) ===
-                    String(myId)
-            );
-
-        if (mySlot) {
-
-            currentSlotId =
-                mySlot.id;
-
-            console.log(
-                "ℹ️ البوت موجود بالفعل"
-            );
-
-            return;
-        }
-
-        const freeSlot =
-            slots.find(
-                slot =>
-                    !slot?.occupierId
-            );
-
-        if (!freeSlot) {
-
-            console.log(
-                "❌ لا يوجد Slot فاضي"
-            );
-
-            return;
-        }
-
-        await service.stage.slot.join(
-            GROUP_ID,
-            freeSlot.id
-        );
-
-        currentSlotId =
-            freeSlot.id;
-
-        console.log(
-            "✅ تم الدخول الإجباري"
-        );
-
-        autoCheckEnabled =
-            false;
-
-        if (monitorTimer) {
-
-            clearInterval(
-                monitorTimer
-            );
-
-            monitorTimer = null;
-        }
-
-    } catch (error) {
-
-        console.error(
-            "❌ خطأ في الدخول الإجباري:",
-            error?.message ||
-            error
-        );
-    }
-}
-
-// ============================================================
-// Private Messages
-// ============================================================
-
-function setupPrivateMessages() {
-
-    console.log("");
-    console.log(
-        "📨 تشغيل مراقبة الرسائل الخاصة"
-    );
-
-    const possibleEvents = [
-        "privateMessage",
-        "private_message",
-        "message",
-        "chatMessage",
-        "chat_message"
-    ];
-
-    for (const eventName of possibleEvents) {
-
-        socket?.on(
-            eventName,
-            async data => {
-
-                try {
-
-                    const senderId =
-                        getSenderId(data);
-
-                    const text =
-                        getMessageText(data);
-
-                    if (!senderId) {
-                        return;
-                    }
-
-                    if (!text) {
-                        return;
-                    }
-
-                    const watched =
-                        WATCHED_SUBSCRIBER_IDS
-                            .map(String)
-                            .includes(
-                                String(senderId)
-                            );
-
-                    if (!watched) {
-                        return;
-                    }
-
-                    console.log("");
-                    console.log(
-                        "📨 [PRIVATE]",
-                        senderId,
-                        ":",
-                        text
-                    );
-
-                    if (
-                        text ===
-                        LEAVE_COMMAND
-                    ) {
-
-                        console.log(
-                            "📥 أمر النزول"
-                        );
-
-                        autoCheckEnabled =
-                            false;
-
-                        await leaveStage();
-
-                        autoCheckEnabled =
-                            true;
-
-                        startMonitor();
-
-                        return;
-                    }
-
-                    if (
-                        text ===
-                        JOIN_COMMAND
-                    ) {
-
-                        console.log(
-                            "📥 أمر الصعود"
-                        );
-
-                        await forceJoinStage();
-
-                        return;
-                    }
-
-                } catch (error) {
-
-                    console.error(
-                        "❌ Private message error:",
-                        error?.message ||
-                        error
-                    );
-                }
-            }
-        );
-    }
-
-    console.log(
-        "✅ Private command listener active"
-    );
-}
-
-// ============================================================
-// Monitor
-// ============================================================
-
-function startMonitor() {
-
-    if (shuttingDown) {
-        return;
-    }
-
-    if (monitorTimer) {
-
-        clearInterval(
-            monitorTimer
-        );
-    }
-
-    autoCheckEnabled =
-        true;
-
-    monitorTimer =
-        setInterval(
-            () => {
-
-                checkStageAndJoin()
-                    .catch(error => {
-
-                        console.error(
-                            "❌ Monitor error:",
-                            error?.message ||
-                            error
-                        );
-                    });
-
-            },
-            CHECK_INTERVAL_MS
-        );
-
-    console.log(
-        "⏱️ Stage monitor:",
-        "كل 10 دقائق"
-    );
-}
-
-// ============================================================
-// Main
-// ============================================================
 
 async function main() {
-
     try {
+        if (!EMAIL || !PASSWORD) {
+            throw new Error(
+                "❌ يجب إضافة WOLF_EMAIL و WOLF_PASSWORD في GitHub Secrets"
+            );
+        }
+
+        if (!CHROME_PATH) {
+            throw new Error(
+                "❌ CHROME_PATH غير موجود"
+            );
+        }
 
         console.log("");
-        console.log("========================================");
-        console.log("🐺 WOLF BOT");
-        console.log("========================================");
+        console.log("🐺 WOLF Browser Login Diagnostic");
+        console.log("");
 
-        console.log(
-            "Node:",
-            process.version
-        );
+        console.log("Chrome executable:");
+        console.log(CHROME_PATH);
 
-        console.log(
-            "Chrome:",
-            CHROME_PATH
-        );
-
-        console.log("========================================");
-
-        // Chrome
-        await startChrome();
-
-        // WOLF
-        await openWolf();
-
-        // Login
-        await loginToWolf();
-
-        // Credentials
-        const credentials =
-            await readWolfStorage();
-
-        // WOLF service
-        await createWolfService(
-            credentials
-        );
-
-        // websocket
-        await initializeWolfSocket();
-
-        // socket.io
-        await connectSocketIO(
-            credentials
-        );
-
-        // private messages
-        setupPrivateMessages();
+        if (!fs.existsSync(CHROME_PATH)) {
+            throw new Error(
+                `❌ ملف Chrome غير موجود في: ${CHROME_PATH}`
+            );
+        }
 
         console.log("");
-        console.log("========================================");
-        console.log("🐺 WOLF is running");
-        console.log("========================================");
+        console.log("🚀 تشغيل Google Chrome...");
 
-        console.log(
-            "Group:",
-            GROUP_ID
-        );
+        browser = await puppeteer.launch({
+            executablePath: CHROME_PATH,
 
-        console.log(
-            "Max occupants:",
-            MAX_OCCUPANTS_TO_JOIN
-        );
+            headless: false,
 
-        console.log(
-            "Check interval:",
-            "10 minutes"
-        );
+            defaultViewport: {
+                width: 600,
+                height: 600,
+                deviceScaleFactor: 1
+            },
 
-        // أول فحص
-        await checkStageAndJoin();
+            args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
 
-        // تشغيل المراقبة
-        startMonitor();
+                "--window-size=600,600",
 
-        // منع انتهاء process
-        process.stdin.resume();
+                "--lang=ar-SA",
+                "--accept-lang=ar-SA,ar,en-US,en",
+
+                "--no-first-run",
+                "--no-default-browser-check",
+
+                "--disable-popup-blocking",
+                "--disable-notifications"
+            ]
+        });
+
+        page = await browser.newPage();
+
+        /*
+         * أخطاء JavaScript داخل WOLF
+         */
+        page.on("pageerror", (error) => {
+            console.log("");
+            console.log("⚠️ PAGE ERROR");
+            console.log(error?.stack || error?.message || error);
+        });
+
+        /*
+         * أخطاء الشبكة فقط.
+         * لا نطبع Headers أو Cookies أو Body.
+         */
+        page.on("requestfailed", (request) => {
+            const failure = request.failure();
+
+            if (failure) {
+                console.log(
+                    "🌐 Request failed:",
+                    request.url(),
+                    "|",
+                    failure.errorText
+                );
+            }
+        });
+
+        page.on("console", (message) => {
+            const type = message.type();
+
+            if (
+                type === "error" ||
+                type === "warning"
+            ) {
+                console.log(
+                    `[PAGE ${type}]`,
+                    message.text()
+                );
+            }
+        });
+
+        await printBrowserInfo();
+
+        console.log("");
+        console.log("🌐 فتح WOLF...");
+        console.log(WOLF_URL);
+
+        await page.goto(WOLF_URL, {
+            waitUntil: "domcontentloaded",
+            timeout: 120000
+        });
+
+        console.log("✅ WOLF opened");
+
+        await sleep(8000);
+
+        console.log("");
+        console.log("📐 معلومات الصفحة بعد التحميل:");
+
+        const pageInfo = await page.evaluate(() => ({
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            outerWidth: window.outerWidth,
+            outerHeight: window.outerHeight,
+            dpr: window.devicePixelRatio,
+            url: location.href,
+            title: document.title,
+            userAgent: navigator.userAgent
+        }));
+
+        console.log("innerWidth :", pageInfo.innerWidth);
+        console.log("innerHeight:", pageInfo.innerHeight);
+        console.log("outerWidth :", pageInfo.outerWidth);
+        console.log("outerHeight:", pageInfo.outerHeight);
+        console.log("DPR        :", pageInfo.dpr);
+        console.log("URL        :", pageInfo.url);
+        console.log("Title      :", pageInfo.title);
+        console.log("Browser    :", pageInfo.userAgent);
+
+        await saveScreenshot("wolf-page-loaded");
+
+        /*
+         * محاولة الدخول
+         */
+        await loginWithCoordinates();
+
+        /*
+         * إعطاء WOLF وقتًا لإكمال الجلسة
+         */
+        console.log("");
+        console.log("⏳ انتظار اكتمال الجلسة...");
+        await sleep(15000);
+
+        await saveScreenshot("wolf-session-final");
+
+        /*
+         * قراءة credentials
+         */
+        const credentials = await readCredentials();
+
+        if (!credentials) {
+            logLine();
+            console.log("❌ لم يتم تسجيل الدخول بشكل مكتمل");
+            console.log("");
+            console.log(
+                "راجع الصور المرفوعة من GitHub Actions:"
+            );
+            console.log(
+                "wolf-page-loaded"
+            );
+            console.log(
+                "wolf-login-before"
+            );
+            console.log(
+                "wolf-login-form"
+            );
+            console.log(
+                "wolf-login-filled"
+            );
+            console.log(
+                "wolf-login-after"
+            );
+            console.log(
+                "wolf-session-final"
+            );
+            logLine();
+
+            process.exitCode = 1;
+            return;
+        }
+
+        logLine();
+        console.log("✅ تسجيل الدخول يبدو ناجحًا");
+        console.log("🐺 يمكن الآن الانتقال إلى wolf.js");
+        logLine();
+
+        /*
+         * نبقي المتصفح مفتوحًا قليلًا للتشخيص.
+         */
+        await sleep(5000);
 
     } catch (error) {
+        console.log("");
+        console.log("❌ حصل خطأ:");
+        console.log(error?.stack || error?.message || error);
 
-        console.error("");
-        console.error("========================================");
-        console.error("❌ حصل خطأ");
-        console.error("========================================");
-
-        console.error(
-            error?.stack ||
-            error
-        );
+        if (page) {
+            await saveScreenshot("wolf-error").catch(() => {});
+        }
 
         process.exitCode = 1;
+
+    } finally {
+        /*
+         * في مرحلة التشخيص نغلق Chrome.
+         */
+        if (browser) {
+            try {
+                await browser.close();
+            } catch {}
+        }
     }
 }
 
-// ============================================================
-// Shutdown
-// ============================================================
-
-async function shutdown(signal) {
-
-    if (shuttingDown) {
-        return;
-    }
-
-    shuttingDown = true;
-
+process.on("SIGINT", async () => {
     console.log("");
-    console.log(
-        `🛑 Shutdown: ${signal}`
-    );
+    console.log("🛑 إيقاف البرنامج...");
 
-    try {
-
-        if (monitorTimer) {
-
-            clearInterval(
-                monitorTimer
-            );
-
-            monitorTimer =
-                null;
-        }
-
-        if (socket) {
-
-            socket.disconnect();
-
-            socket =
-                null;
-        }
-
-        if (browser) {
-
+    if (browser) {
+        try {
             await browser.close();
-
-            browser =
-                null;
-        }
-
-    } catch (error) {
-
-        console.error(
-            "Shutdown error:",
-            error?.message ||
-            error
-        );
+        } catch {}
     }
 
     process.exit(0);
-}
+});
 
-// ============================================================
-// Signals
-// ============================================================
+process.on("SIGTERM", async () => {
+    console.log("");
+    console.log("🛑 إيقاف البرنامج...");
 
-process.on(
-    "SIGINT",
-    () => shutdown("SIGINT")
-);
+    if (browser) {
+        try {
+            await browser.close();
+        } catch {}
+    }
 
-process.on(
-    "SIGTERM",
-    () => shutdown("SIGTERM")
-);
-
-// ============================================================
-// Start
-// ============================================================
+    process.exit(0);
+});
 
 main();
