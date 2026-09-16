@@ -9,9 +9,17 @@ import { chromium } from "playwright";
 const LOGIN_URL = "https://wolf.live/mna";
 const APP_URL = "https://app.wolf.live/";
 
-const VIEWPORT = { width: 600, height: 600 };
+// حجم نافذة المتصفح
+const VIEWPORT = {
+    width: 600,
+    height: 600
+};
 
+// الانتظار بين كل خطوة
 const WAIT_BETWEEN_STEPS_MS = 3000;
+
+// الانتظار بعد تحميل الصفحة وقبل أول نقرة
+const WAIT_BEFORE_FIRST_CLICK_MS = 15000;
 
 // نفس تسلسل النقرات اللي سجّلناها بحجم نافذة 600×600
 const STEPS = [
@@ -19,16 +27,21 @@ const STEPS = [
     { label: "نقرة 2", x: 556, y: 29, type: "click" },
     { label: "نقرة 3", x: 516, y: 75, type: "click" },
     { label: "نقرة 4", x: 176, y: 341, type: "click" },
+
     { label: "حقل الإيميل", x: 268, y: 127, type: "type_email" },
     { label: "حقل الباسورد", x: 262, y: 197, type: "type_password" },
+
     { label: "زر الدخول", x: 243, y: 281, type: "click" }
 ];
 
 const WOLF_EMAIL = process.env.WOLF_EMAIL || "mona24682@gmail.com";
 const WOLF_PASSWORD = process.env.WOLF_PASSWORD || "As1412as";
 
-// جلسة Chrome تُحفظ محلياً على نفس الجهاز فقط (ما تُرفع ولا تنتهي بـ24 ساعة،
-// لأننا نسجل الدخول من جديد كل مرة بدلاً من الاعتماد عليها)
+// ============================================================
+// مجلد العمل
+// ============================================================
+
+// جلسة Chrome تُحفظ محلياً على نفس الجهاز فقط
 const WORK_DIR = path.resolve("./wolf-runtime");
 const PROFILE_DIR = path.join(WORK_DIR, "profile");
 
@@ -72,8 +85,10 @@ function findChrome() {
         "/usr/bin/google-chrome-stable",
         "/usr/bin/chromium",
         "/usr/bin/chromium-browser",
+
         "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
         "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+
         path.join(
             process.env.LOCALAPPDATA || "",
             "Google",
@@ -95,7 +110,10 @@ function findChrome() {
         }
     }
 
-    console.log("⚠️ لم يتم العثور على Google Chrome، سيُستخدم Chromium الخاص بـ Playwright.");
+    console.log(
+        "⚠️ لم يتم العثور على Google Chrome، سيُستخدم Chromium الخاص بـ Playwright."
+    );
+
     return null;
 }
 
@@ -113,22 +131,34 @@ async function performLogin() {
 
     console.log("");
     console.log("========================================");
-    console.log("🔑 تسجيل دخول تلقائي (بدون جلسة محفوظة)");
+    console.log("🔑 تسجيل دخول تلقائي");
     console.log("========================================");
 
-    fs.mkdirSync(WORK_DIR, { recursive: true });
+    fs.mkdirSync(WORK_DIR, {
+        recursive: true
+    });
 
     const executablePath = findChrome();
 
     const launchOptions = {
         headless: true,
+
         viewport: VIEWPORT,
-        args: [`--window-size=${VIEWPORT.width},${VIEWPORT.height}`]
+
+        args: [
+            `--window-size=${VIEWPORT.width},${VIEWPORT.height}`
+        ]
     };
 
     if (executablePath) {
         launchOptions.executablePath = executablePath;
     }
+
+    // ========================================================
+    // تشغيل Chrome
+    // ========================================================
+
+    console.log("🚀 تشغيل المتصفح...");
 
     browserContext = await chromium.launchPersistentContext(
         PROFILE_DIR,
@@ -136,7 +166,15 @@ async function performLogin() {
     );
 
     const pages = browserContext.pages();
-    wolfPage = pages.length > 0 ? pages[0] : await browserContext.newPage();
+
+    wolfPage =
+        pages.length > 0
+            ? pages[0]
+            : await browserContext.newPage();
+
+    // ========================================================
+    // فتح صفحة الدخول
+    // ========================================================
 
     console.log(`🌐 فتح صفحة الدخول: ${LOGIN_URL}`);
 
@@ -147,35 +185,97 @@ async function performLogin() {
 
     console.log("✅ تم تحميل صفحة الدخول.");
 
-    await sleep(WAIT_BETWEEN_STEPS_MS);
+    // ========================================================
+    // انتظار الصفحة قبل أول نقرة
+    // ========================================================
+
+    console.log("");
+    console.log("⏳ انتظار الصفحة قبل بدء النقر...");
+    console.log(
+        `⏳ سيتم الانتظار ${WAIT_BEFORE_FIRST_CLICK_MS / 1000} ثانية...`
+    );
+
+    await sleep(WAIT_BEFORE_FIRST_CLICK_MS);
+
+    console.log("✅ انتهى انتظار تحميل الصفحة.");
+    console.log("🖱️ بدء تسلسل النقرات...");
+    console.log("");
+
+    // ========================================================
+    // تنفيذ خطوات تسجيل الدخول
+    // ========================================================
 
     for (let i = 0; i < STEPS.length; i++) {
 
         const step = STEPS[i];
 
         console.log(
-            `الخطوة ${i + 1}/${STEPS.length}: ${step.label} (x=${step.x}, y=${step.y})`
+            `الخطوة ${i + 1}/${STEPS.length}: ${step.label} ` +
+            `(x=${step.x}, y=${step.y})`
         );
 
-        await wolfPage.mouse.click(step.x, step.y);
+        // النقرة
+        await wolfPage.mouse.click(
+            step.x,
+            step.y
+        );
+
+        // ====================================================
+        // إدخال الإيميل
+        // ====================================================
 
         if (step.type === "type_email") {
-            await wolfPage.keyboard.type(WOLF_EMAIL);
-        } else if (step.type === "type_password") {
-            await wolfPage.keyboard.type(WOLF_PASSWORD);
+
+            console.log("⌨️ كتابة الإيميل...");
+
+            await wolfPage.keyboard.type(
+                WOLF_EMAIL
+            );
         }
 
+        // ====================================================
+        // إدخال كلمة المرور
+        // ====================================================
+
+        else if (step.type === "type_password") {
+
+            console.log("🔐 كتابة كلمة المرور...");
+
+            await wolfPage.keyboard.type(
+                WOLF_PASSWORD
+            );
+        }
+
+        // ====================================================
+        // انتظار بين الخطوات
+        // ====================================================
+
         if (i < STEPS.length - 1) {
-            await sleep(WAIT_BETWEEN_STEPS_MS);
+
+            console.log(
+                `⏳ انتظار ${WAIT_BETWEEN_STEPS_MS / 1000} ثوانٍ...`
+            );
+
+            await sleep(
+                WAIT_BETWEEN_STEPS_MS
+            );
         }
     }
 
+    // ========================================================
+    // بعد إرسال بيانات الدخول
+    // ========================================================
+
+    console.log("");
     console.log("✅ تم إرسال بيانات الدخول.");
 
-    // إعطاء الموقع وقتاً لإتمام تسجيل الدخول وحفظ التوكنات
     console.log("⏳ انتظار اكتمال تسجيل الدخول...");
 
     await sleep(5000);
+
+    // ========================================================
+    // فتح APP_URL
+    // ========================================================
 
     console.log(`🌐 فتح ${APP_URL} لاستخراج الجلسة...`);
 
@@ -189,11 +289,12 @@ async function performLogin() {
     await sleep(10000);
 
     console.log("✅ الجلسة جاهزة.");
+
     console.log("========================================");
 }
 
 // ============================================================
-// Extract LocalStorage
+// Extract LocalStorage + IndexedDB
 // ============================================================
 
 async function extractCredentialsFromChrome() {
@@ -205,13 +306,21 @@ async function extractCredentialsFromChrome() {
 
     let data = null;
 
+    // ========================================================
+    // قراءة LocalStorage
+    // ========================================================
+
     try {
 
         data = await wolfPage.evaluate(() => {
 
             const result = {};
 
-            for (let i = 0; i < localStorage.length; i++) {
+            for (
+                let i = 0;
+                i < localStorage.length;
+                i++
+            ) {
 
                 const key = localStorage.key(i);
 
@@ -219,111 +328,269 @@ async function extractCredentialsFromChrome() {
                     continue;
                 }
 
-                result[key] = localStorage.getItem(key);
+                result[key] =
+                    localStorage.getItem(key);
             }
 
             return result;
         });
 
     } catch (error) {
-        throw new Error(`❌ فشل قراءة LocalStorage: ${error.message}`);
+
+        throw new Error(
+            `❌ فشل قراءة LocalStorage: ${error.message}`
+        );
     }
 
-    const token = data?.v3APIToken || null;
+    // ========================================================
+    // استخراج v3APIToken
+    // ========================================================
+
+    const token =
+        data?.v3APIToken || null;
+
     let appCheckToken = null;
 
-    // ------------------------------------------------------
-    // App Check الحقيقي يُخزَّن تحديداً بـ:
-    //   IndexedDB > firebase-app-check-database > firebase-app-check-store
-    // وقد يحتاج وقت إضافي لين يتولّد (يتولّد عند أول طلب API يحتاجه).
-    // نعيد المحاولة عدة مرات بدل قنص أي حقل "token" عشوائي بالداتا.
-    // ------------------------------------------------------
+    // ========================================================
+    // قراءة Firebase App Check
+    // ========================================================
 
     const MAX_ATTEMPTS = 6;
     const RETRY_DELAY_MS = 5000;
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS && !appCheckToken; attempt++) {
+    for (
+        let attempt = 1;
+        attempt <= MAX_ATTEMPTS && !appCheckToken;
+        attempt++
+    ) {
 
         if (attempt > 1) {
+
             console.log(
-                `🔎 محاولة ${attempt}/${MAX_ATTEMPTS}: انتظار توليد appCheckToken الحقيقي...`
+                `🔎 محاولة ${attempt}/${MAX_ATTEMPTS}: ` +
+                "انتظار توليد appCheckToken الحقيقي..."
             );
-            await sleep(RETRY_DELAY_MS);
+
+            await sleep(
+                RETRY_DELAY_MS
+            );
         }
 
         try {
 
-            const appCheckRecords = await wolfPage.evaluate(async () => {
+            const appCheckRecords =
+                await wolfPage.evaluate(
+                    async () => {
 
-                const dbName = "firebase-app-check-database";
-                const storeName = "firebase-app-check-store";
+                        const dbName =
+                            "firebase-app-check-database";
 
-                const db = await new Promise((resolve, reject) => {
-                    const req = indexedDB.open(dbName);
-                    req.onsuccess = () => resolve(req.result);
-                    req.onerror = () => reject(req.error);
-                });
+                        const storeName =
+                            "firebase-app-check-store";
 
-                if (!db.objectStoreNames.contains(storeName)) {
-                    db.close();
-                    return [];
-                }
+                        // ------------------------------------
+                        // فتح IndexedDB
+                        // ------------------------------------
 
-                const tx = db.transaction(storeName, "readonly");
-                const store = tx.objectStore(storeName);
+                        const db =
+                            await new Promise(
+                                (resolve, reject) => {
 
-                const records = await new Promise((resolve, reject) => {
-                    const r = store.getAll();
-                    r.onsuccess = () => resolve(r.result);
-                    r.onerror = () => reject(r.error);
-                });
+                                    const req =
+                                        indexedDB.open(
+                                            dbName
+                                        );
 
-                db.close();
-                return records;
-            });
+                                    req.onsuccess = () =>
+                                        resolve(
+                                            req.result
+                                        );
 
-            if (Array.isArray(appCheckRecords) && appCheckRecords.length > 0) {
+                                    req.onerror = () =>
+                                        reject(
+                                            req.error
+                                        );
+                                }
+                            );
 
-                console.log(
-                    `📋 firebase-app-check-store يحتوي ${appCheckRecords.length} سجل.`
+                        // ------------------------------------
+                        // التأكد من وجود Store
+                        // ------------------------------------
+
+                        if (
+                            !db.objectStoreNames.contains(
+                                storeName
+                            )
+                        ) {
+
+                            db.close();
+
+                            return [];
+                        }
+
+                        // ------------------------------------
+                        // قراءة السجلات
+                        // ------------------------------------
+
+                        const tx =
+                            db.transaction(
+                                storeName,
+                                "readonly"
+                            );
+
+                        const store =
+                            tx.objectStore(
+                                storeName
+                            );
+
+                        const records =
+                            await new Promise(
+                                (resolve, reject) => {
+
+                                    const r =
+                                        store.getAll();
+
+                                    r.onsuccess = () =>
+                                        resolve(
+                                            r.result
+                                        );
+
+                                    r.onerror = () =>
+                                        reject(
+                                            r.error
+                                        );
+                                }
+                            );
+
+                        db.close();
+
+                        return records;
+                    }
                 );
 
-                // كل سجل عادة بشكل { compositeKey, token, expireTimeMillis }
-                const record = appCheckRecords.find(r => r?.token) || appCheckRecords[0];
+            // =================================================
+            // معالجة النتائج
+            // =================================================
 
-                appCheckToken = record?.token || null;
+            if (
+                Array.isArray(appCheckRecords) &&
+                appCheckRecords.length > 0
+            ) {
+
+                console.log(
+                    `📋 firebase-app-check-store يحتوي ` +
+                    `${appCheckRecords.length} سجل.`
+                );
+
+                // عادة يكون السجل:
+                //
+                // {
+                //   compositeKey,
+                //   token,
+                //   expireTimeMillis
+                // }
+
+                const record =
+                    appCheckRecords.find(
+                        r => r?.token
+                    ) ||
+                    appCheckRecords[0];
+
+                appCheckToken =
+                    record?.token || null;
             }
 
         } catch (error) {
-            console.log(`⚠️ تعذر فحص firebase-app-check-store: ${error.message}`);
+
+            console.log(
+                `⚠️ تعذر فحص firebase-app-check-store: ` +
+                `${error.message}`
+            );
         }
     }
 
+    // ========================================================
+    // التحقق من App Check
+    // ========================================================
+
     if (!appCheckToken) {
-        console.log("💡 لم يتولّد appCheckToken تلقائياً — قد يحتاج الموقع طلب API فعلي ليولّده.");
+
+        console.log(
+            "💡 لم يتولّد appCheckToken تلقائياً — " +
+            "قد يحتاج الموقع طلب API فعلي ليولّده."
+        );
+
     } else {
-        console.log("✅ تم العثور على appCheckToken الحقيقي من firebase-app-check-store.");
+
+        console.log(
+            "✅ تم العثور على appCheckToken الحقيقي " +
+            "من firebase-app-check-store."
+        );
     }
+
+    // ========================================================
+    // التحقق من v3APIToken
+    // ========================================================
 
     if (!token) {
-        console.log("❌ لم يتم العثور على v3APIToken");
-        console.log("📍 تأكد أن تسجيل الدخول تم بنجاح (راجع لقطة شاشة إذا لزم).");
-        throw new Error("لم يتم العثور على v3APIToken بعد تسجيل الدخول");
+
+        console.log(
+            "❌ لم يتم العثور على v3APIToken"
+        );
+
+        console.log(
+            "📍 تأكد أن تسجيل الدخول تم بنجاح."
+        );
+
+        throw new Error(
+            "لم يتم العثور على v3APIToken بعد تسجيل الدخول"
+        );
     }
+
+    // ========================================================
+    // التحقق من App Check Token
+    // ========================================================
 
     if (!appCheckToken) {
-        console.log("❌ لم يتم العثور على appCheckToken (لا بـ localStorage ولا IndexedDB)");
-        throw new Error("لم يتم العثور على appCheckToken بعد تسجيل الدخول");
+
+        console.log(
+            "❌ لم يتم العثور على appCheckToken " +
+            "(لا بـ localStorage ولا IndexedDB)"
+        );
+
+        throw new Error(
+            "لم يتم العثور على appCheckToken بعد تسجيل الدخول"
+        );
     }
 
-    console.log(`🔐 v3APIToken: ${mask(token)} (${token.length})`);
-    console.log(`🛡️ appCheckToken: ${mask(appCheckToken)} (${appCheckToken.length})`);
+    // ========================================================
+    // عرض البيانات بشكل مخفي
+    // ========================================================
+
+    console.log(
+        `🔐 v3APIToken: ${mask(token)} (${token.length})`
+    );
+
+    console.log(
+        `🛡️ appCheckToken: ` +
+        `${mask(appCheckToken)} (${appCheckToken.length})`
+    );
+
     console.log("========================================");
 
+    // ========================================================
+    // إرجاع credentials
+    // ========================================================
+
     return {
+
         token: String(token).trim(),
-        appCheckToken: String(appCheckToken).trim(),
+
+        appCheckToken:
+            String(appCheckToken).trim(),
+
         device: "web",
+
         isAppCheckEnabled: true
     };
 }
@@ -336,12 +603,15 @@ export async function loadSession() {
 
     console.log("");
     console.log("========================================");
-    console.log("🐺 WOLF Login Loader (تسجيل دخول تلقائي)");
+    console.log("🐺 WOLF Login Loader");
     console.log("========================================");
 
+    // تسجيل الدخول
     await performLogin();
 
-    const credentials = await extractCredentialsFromChrome();
+    // استخراج التوكنات
+    const credentials =
+        await extractCredentialsFromChrome();
 
     return credentials;
 }
