@@ -19,7 +19,7 @@ jobs:
 
 
       # ========================================
-      # Node.js
+      # Node
       # ========================================
 
       - name: Setup Node.js
@@ -42,7 +42,7 @@ jobs:
 
 
       # ========================================
-      # التحقق من Chrome
+      # Chrome information
       # ========================================
 
       - name: Check Google Chrome
@@ -63,23 +63,17 @@ jobs:
           "$CHROME_PATH" --version
 
           echo ""
-          echo "System google-chrome:"
+          echo "System Chrome:"
           command -v google-chrome || true
 
           google-chrome --version || true
-
-          echo ""
-          echo "System google-chrome-stable:"
-          command -v google-chrome-stable || true
-
-          google-chrome-stable --version || true
 
           echo ""
           echo "========================================"
 
 
       # ========================================
-      # تثبيت Dependencies
+      # Dependencies
       # ========================================
 
       - name: Install dependencies
@@ -104,26 +98,23 @@ jobs:
 
 
       # ========================================
-      # اختبار Xvfb
+      # Xvfb
       # ========================================
 
       - name: Test Xvfb
         run: |
 
           echo "========================================"
-          echo "TESTING XVFB"
+          echo "TEST XVFB"
           echo "========================================"
 
-          which xvfb-run || true
-          which Xvfb || true
-
-          echo ""
-          echo "Starting virtual display..."
+          which xvfb-run
 
           xvfb-run \
             -a \
             --server-args="-screen 0 600x600x24" \
             bash -c '
+
               echo "DISPLAY=$DISPLAY"
 
               if [ -z "$DISPLAY" ]; then
@@ -132,15 +123,13 @@ jobs:
               fi
 
               echo "✅ X Server is working"
-              echo "DISPLAY=$DISPLAY"
             '
 
-          echo ""
           echo "========================================"
 
 
       # ========================================
-      # تشغيل WOLF
+      # WOLF
       # ========================================
 
       - name: Start WOLF
@@ -175,8 +164,6 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "STARTING XVFB"
-          echo "========================================"
 
           xvfb-run \
             -a \
@@ -184,14 +171,14 @@ jobs:
             --server-args="-screen 0 600x600x24 -ac +extension GLX +render -noreset" \
             env \
               DISPLAY=:99 \
+              CHROME_PATH="$CHROME_PATH" \
               WOLF_EMAIL="$WOLF_EMAIL" \
               WOLF_PASSWORD="$WOLF_PASSWORD" \
-              CHROME_PATH="$CHROME_PATH" \
               npm start
 
 
       # ========================================
-      # رفع صور التشخيص
+      # Screenshots
       # ========================================
 
       - name: Upload WOLF screenshots
