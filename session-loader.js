@@ -9,7 +9,6 @@ import { chromium } from "playwright";
 // WOLF Profile Configuration
 // ============================================================
 
-// رابط wolf-profile.zip من Google Drive
 const WOLF_PROFILE_URL = process.env.WOLF_PROFILE_URL || "";
 
 // ============================================================
@@ -43,9 +42,7 @@ function sleep(ms) {
 }
 
 function mask(value) {
-    if (!value) {
-        return "غير موجود";
-    }
+    if (!value) return "غير موجود";
     const text = String(value);
     if (text.length <= 16) {
         return `${text.slice(0, 4)}...${text.slice(-4)}`;
@@ -242,7 +239,7 @@ async function startChrome(profileDir) {
     const executablePath = findChrome();
 
     const launchOptions = {
-        headless: false, // ✅ تم التعديل: تشغيل المتصفح في وضع مرئي (خلف الكواليس)
+        headless: false, // ✅ تشغيل المتصفح في وضع مرئي (خلف الكواليس عبر xvfb)
         viewport: { width: 1366, height: 768 },
         args: [
             "--no-sandbox",
@@ -277,23 +274,23 @@ async function startChrome(profileDir) {
     console.log("✅ تم فتح WOLF");
     console.log("⏳ انتظار تحميل جلسة WOLF وتوليد appCheckToken...");
 
-    // ✅ تم التعديل: استخدام waitForFunction للانتظار الديناميكي بدلاً من وقت ثابت
+    // انتظار ديناميكي: ننتظر حتى يظهر v3APIToken أو appCheckToken
     try {
         await wolfPage.waitForFunction(
-            () => localStorage.getItem('appCheckToken') !== null,
-            { timeout: 90000 } // انتظار حتى 90 ثانية
+            () => localStorage.getItem('appCheckToken') !== null || localStorage.getItem('v3APIToken') !== null,
+            { timeout: 90000 }
         );
-        console.log("✅ تم العثور على appCheckToken في localStorage");
+        console.log("✅ تم العثور على بيانات الجلسة في localStorage");
     } catch (e) {
         console.log("⚠️ انتهت المهلة، جاري محاولة القراءة على أي حال...");
-        await sleep(5000); // انتظار إضافي احتياطي
+        await sleep(5000);
     }
 
     return browserContext;
 }
 
 // ============================================================
-// Extract LocalStorage
+// Extract LocalStorage + IndexedDB
 // ============================================================
 
 async function extractCredentialsFromChrome() {
@@ -303,6 +300,7 @@ async function extractCredentialsFromChrome() {
 
     let data = null;
 
+    // 1. محاولة القراءة من LocalStorage
     try {
         data = await wolfPage.evaluate(() => {
             const result = {};
@@ -317,11 +315,49 @@ async function extractCredentialsFromChrome() {
         throw new Error(`❌ فشل قراءة LocalStorage: ${error.message}`);
     }
 
-    // ✅ تم التعديل: إضافة طباعة تشخيصية
     console.log("🔍 محتويات LocalStorage:", Object.keys(data));
 
     const token = data?.v3APIToken || null;
-    const appCheckToken = data?.appCheckToken || null;
+    let appCheckToken = data?.appCheckToken || null;
+
+    // 2. إذا لم نجد appCheckToken في LocalStorage، نبحث في IndexedDB
+    if (!appCheckToken) {
+        console.log("⚠️ appCheckToken غير موجود في LocalStorage، جاري البحث في IndexedDB...");
+        try {
+            appCheckToken = await wolfPage.evaluate(async () => {
+                return new Promise((resolve) => {
+                    const request = indexedDB.open('firebaseLocalStorageDb');
+                    request.onsuccess = (event) => {
+                        const db = event.target.result;
+                        if (!db.objectStoreNames.contains('firebaseLocalStorage')) {
+                            resolve(null);
+                            return;
+                        }
+                        const transaction = db.transaction('firebaseLocalStorage', 'readonly');
+                        const store = transaction.objectStore('firebaseLocalStorage');
+                        const getAllRequest = store.getAll();
+                        getAllRequest.onsuccess = () => {
+                            const records = getAllRequest.result;
+                            for (const record of records) {
+                                if (record && record.value && record.value.key && record.value.key.includes('appCheckToken')) {
+                                    resolve(record.value.value);
+                                    return;
+                                }
+                            }
+                            resolve(null);
+                        };
+                        getAllRequest.onerror = () => resolve(null);
+                    };
+                    request.onerror = () => resolve(null);
+                });
+            });
+            if (appCheckToken) {
+                console.log("✅ تم العثور على appCheckToken في IndexedDB");
+            }
+        } catch (e) {
+            console.log("⚠️ فشل البحث في IndexedDB:", e.message);
+        }
+    }
 
     if (!token) {
         console.log("❌ لم يتم العثور على v3APIToken");
@@ -330,8 +366,7 @@ async function extractCredentialsFromChrome() {
     }
 
     if (!appCheckToken) {
-        console.log("❌ لم يتم العثور على appCheckToken");
-        console.log("🔍 هل appCheckToken موجود؟", !!data.appCheckToken);
+        console.log("❌ لم يتم العثور على appCheckToken في LocalStorage أو IndexedDB");
         throw new Error("لم يتم العثور على appCheckToken داخل Chrome Profile");
     }
 
