@@ -12,6 +12,10 @@ const WOLF_PROFILE_URL = process.env.WOLF_PROFILE_URL || "";
 const DEFAULT_DEVICE = "web";
 const DEFAULT_APP_CHECK_ENABLED = true;
 
+// الحد الأدنى لصلاحية appCheckToken (بالثواني)
+// إذا كان أقل من 30 دقيقة، نعتبره منتهيًا ونعيد التنزيل
+const MIN_APPCHECK_TTL_SECONDS = 30 * 60;
+
 // ============================================================
 // Paths
 // ============================================================
@@ -40,6 +44,34 @@ function mask(value) {
     const text = String(value);
     if (text.length <= 16) return `${text.slice(0, 4)}...${text.slice(-4)}`;
     return `${text.slice(0, 8)}...${text.slice(-8)}`;
+}
+
+// ============================================================
+// فحص صلاحية JWT
+// ============================================================
+
+function getJwtExpiry(token) {
+    if (!token) return null;
+    try {
+        const parts = String(token).split(".");
+        if (parts.length !== 3) return null;
+
+        // base64url → base64
+        let payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        while (payload.length % 4) payload += "=";
+
+        const decoded = Buffer.from(payload, "base64").toString("utf8");
+        const obj = JSON.parse(decoded);
+        return typeof obj.exp === "number" ? obj.exp : null;
+    } catch {
+        return null;
+    }
+}
+
+function getRemainingSeconds(token) {
+    const exp = getJwtExpiry(token);
+    if (!exp) return null;
+    return exp - Math.floor(Date.now() / 1000);
 }
 
 // ============================================================
@@ -299,7 +331,7 @@ async function startChrome(profileDir) {
     console.log("✅ تم فتح WOLF");
     console.log("⏳ انتظار تحميل جلسة WOLF...");
 
-    await sleep(10000);
+    await sleep(12000);
     return browserContext;
 }
 
@@ -307,12 +339,7 @@ async function startChrome(profileDir) {
 // Extract Credentials
 // ============================================================
 
-async function extractCredentialsFromChrome() {
-    console.log("");
-    console.log("========================================");
-    console.log("🔐 قراءة WOLF credentials من Chrome");
-    console.log("========================================");
-
+async function readCredentials() {
     let data = null;
     try {
         data = await wolfPage.evaluate(() => {
@@ -328,39 +355,83 @@ async function extractCredentialsFromChrome() {
         throw new Error(`❌ فشل قراءة LocalStorage: ${error.message}`);
     }
 
-    const token = data?.v3APIToken || null;
-    const appCheckToken = data?.appCheckToken || null;
+    return {
+        token: data?.v3APIToken || null,
+        appCheckToken: data?.appCheckToken || null
+    };
+}
 
-    if (!token) {
-        console.log("❌ لم يتم العثور على v3APIToken");
-        console.log("📍 تأكد أن جلسة WOLF ما زالت صالحة.");
-        throw new Error("لم يتم العثور على v3APIToken داخل Chrome Profile");
-    }
-
-    if (!appCheckToken) {
-        console.log("❌ لم يتم العثور على appCheckToken");
-        throw new Error("لم يتم العثور على appCheckToken داخل Chrome Profile");
-    }
-
-    console.log(`🔐 v3APIToken: موجود (${token.length})`);
-    console.log(`🔐 v3APIToken: ${mask(token)}`);
-    console.log(`🛡️ appCheckToken: موجود (${appCheckToken.length})`);
-    console.log(`🛡️ appCheckToken: ${mask(appCheckToken)}`);
+async function extractCredentialsFromChrome() {
     console.log("");
-    console.log(`📱 Device: ${DEFAULT_DEVICE}`);
-    console.log(`🛡️ App Check: ${DEFAULT_APP_CHECK_ENABLED}`);
+    console.log("========================================");
+    console.log("🔐 قراءة WOLF credentials من Chrome");
+    console.log("========================================");
+
+    // نحاول حتى 30 ثانية — قد يتأخر التطبيق في توليد appCheckToken
+    let creds = { token: null, appCheckToken: null };
+    for (let i = 1; i <= 30; i++) {
+        creds = await readCredentials();
+
+        if (creds.token && creds.appCheckToken) {
+            break;
+        }
+
+        console.log(`⏳ محاولة ${i}/30... token=${!!creds.token} appCheck=${!!creds.appCheckToken}`);
+        await sleep(1000);
+    }
+
+    if (!creds.token) {
+        console.log("❌ لم يتم العثور على v3APIToken");
+        throw new Error("APPCHECK_MISSING");
+    }
+
+    if (!creds.appCheckToken) {
+        console.log("❌ لم يتم العثور على appCheckToken");
+        throw new Error("APPCHECK_MISSING");
+    }
+
+    // ★ فحص الصلاحية
+    const remaining = getRemainingSeconds(creds.appCheckToken);
+    if (remaining !== null) {
+        const mins = Math.round(remaining / 60);
+        console.log(`🕐 appCheckToken صالح لمدة ${mins} دقيقة`);
+
+        if (remaining < MIN_APPCHECK_TTL_SECONDS) {
+            console.log("⚠️ appCheckToken على وشك الانتهاء");
+            throw new Error("APPCHECK_EXPIRED");
+        }
+    } else {
+        console.log("⚠️ تعذر قراءة exp من appCheckToken");
+    }
+
+    console.log(`🔐 v3APIToken: ${mask(creds.token)} (${creds.token.length})`);
+    console.log(`🛡️ appCheckToken: ${mask(creds.appCheckToken)} (${creds.appCheckToken.length})`);
     console.log("========================================");
 
     return {
-        token: String(token).trim(),
-        appCheckToken: String(appCheckToken).trim(),
+        token: String(creds.token).trim(),
+        appCheckToken: String(creds.appCheckToken).trim(),
         device: DEFAULT_DEVICE,
         isAppCheckEnabled: DEFAULT_APP_CHECK_ENABLED
     };
 }
 
 // ============================================================
-// Main Loader
+// Close browser helper (internal)
+// ============================================================
+
+async function closeBrowserInternal() {
+    if (browserContext) {
+        try {
+            await browserContext.close();
+        } catch {}
+        browserContext = null;
+        wolfPage = null;
+    }
+}
+
+// ============================================================
+// Main Loader — مع إعادة المحاولة
 // ============================================================
 
 export async function loadSession() {
@@ -369,22 +440,61 @@ export async function loadSession() {
     console.log("🐺 WOLF Chrome Profile Loader");
     console.log("========================================");
 
-    // ========================================================
-    // هل يوجد Cache من تشغيل سابق؟
-    // ========================================================
-
     const cachedDir = findUserDataDir(EXTRACT_DIR);
     let profileDir;
 
+    // ========================================================
+    // المحاولة 1: استخدام Cache
+    // ========================================================
     if (cachedDir) {
         console.log(`✅ استخدام Profile من Cache: ${cachedDir}`);
-        console.log("   (يحتوي على توكنات مُحدَّثة من التشغيل السابق)");
-        profileDir = cachedDir;
+
+        try {
+            await startChrome(cachedDir);
+            const credentials = await extractCredentialsFromChrome();
+            console.log("🎉 نجح استخدام Cache — البروفايل صالح");
+            return credentials;
+        } catch (err) {
+            if (
+                err.message !== "APPCHECK_MISSING" &&
+                err.message !== "APPCHECK_EXPIRED"
+            ) {
+                throw err;
+            }
+
+            console.log("");
+            console.log("⚠️ البروفايل من Cache فاسد أو منتهي");
+            console.log(`   السبب: ${err.message}`);
+            console.log("🔄 إعادة التنزيل من Google Drive...");
+            console.log("");
+
+            await closeBrowserInternal();
+
+            // احذف البروفايل الفاسد
+            try {
+                if (fs.existsSync(EXTRACT_DIR)) {
+                    fs.rmSync(EXTRACT_DIR, { recursive: true, force: true });
+                }
+            } catch (e) {
+                console.log("⚠️ تعذر حذف المجلد الفاسد:", e.message);
+            }
+
+            // امسح الـ ZIP القديم
+            try {
+                if (fs.existsSync(ZIP_PATH)) {
+                    fs.unlinkSync(ZIP_PATH);
+                }
+            } catch {}
+        }
     } else {
         console.log("📥 لا يوجد Cache — تنزيل من Google Drive");
-        await downloadProfileZip();
-        profileDir = extractProfile();
     }
+
+    // ========================================================
+    // المحاولة 2: التنزيل من Drive
+    // ========================================================
+    await downloadProfileZip();
+    profileDir = extractProfile();
 
     console.log("📱 DEVICE: web");
     console.log("🛡️ APP CHECK: true");
@@ -392,8 +502,22 @@ export async function loadSession() {
 
     await startChrome(profileDir);
 
-    const credentials = await extractCredentialsFromChrome();
-    return credentials;
+    try {
+        const credentials = await extractCredentialsFromChrome();
+        console.log("🎉 نجح التنزيل من Drive — البروفايل صالح");
+        return credentials;
+    } catch (err) {
+        console.log("");
+        console.log("❌ فشل حتى البروفايل الجديد من Drive");
+        console.log(`   السبب: ${err.message}`);
+        console.log("");
+        console.log("📌 تذكير: بروفايل Google Drive يحتاج أن يُحدَّث");
+        console.log("   من جهاز محلي فيه appCheckToken صالح.");
+        console.log("");
+
+        await closeBrowserInternal();
+        throw err;
+    }
 }
 
 // ============================================================
@@ -406,16 +530,15 @@ export async function closeSessionBrowser() {
         return;
     }
 
-    try {
-        console.log("");
-        console.log("========================================");
-        console.log("🔒 إغلاق Chrome بشكل سليم...");
-        console.log("========================================");
+    console.log("");
+    console.log("========================================");
+    console.log("🔒 إغلاق Chrome بشكل سليم...");
+    console.log("========================================");
 
+    try {
         await browserContext.close();
         browserContext = null;
         wolfPage = null;
-
         console.log("✅ تم إغلاق Chrome — البروفايل محفوظ على القرص");
         console.log("   (جاهز للحفظ في GitHub Cache)");
     } catch (error) {
