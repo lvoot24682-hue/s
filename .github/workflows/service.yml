@@ -1,25 +1,13 @@
 name: WOLF Bot
 
-# ============================================================
-# تشغيل يدوي + تشغيل تلقائي كل 4 ساعات (24 ساعة متواصلة)
-# ============================================================
-
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 */4 * * *"
 
-# ============================================================
-# نسخة WOLF واحدة فقط
-# ============================================================
-
 concurrency:
   group: wolf-bot
   cancel-in-progress: true
-
-# ============================================================
-# JOB
-# ============================================================
 
 jobs:
   wolf:
@@ -27,184 +15,103 @@ jobs:
     timeout-minutes: 330
 
     steps:
-      # ======================================================
-      # Checkout
-      # ======================================================
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # ======================================================
-      # Node.js
-      # ======================================================
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: "20"
 
-      # ======================================================
-      # Install Xvfb & FFmpeg
-      # ======================================================
       - name: Install System Dependencies
         run: |
           echo ""
           echo "========================================"
           echo "🎬 Installing System Dependencies"
           echo "========================================"
-          
           sudo apt-get update
           sudo apt-get install -y ffmpeg xvfb
-          
           echo ""
-          echo "========================================"
           echo "✅ System Dependencies installed successfully"
           echo "========================================"
 
-      # ======================================================
-      # Dependencies
-      # ======================================================
       - name: Install dependencies
         run: |
           echo ""
-          echo "========================================"
           echo "📦 Installing dependencies"
-          echo "========================================"
-          
           npm install
-          # التأكد من تثبيت متصفح Playwright ومتطلباته
           npx playwright install chromium
           npx playwright install-deps chromium
-          
           echo ""
-          echo "========================================"
           echo "✅ Dependencies installed"
-          echo "========================================"
 
-      # ======================================================
-      # Check WOLF Profile
-      # ======================================================
       - name: Check WOLF Profile Secret
         env:
           WOLF_PROFILE_URL: ${{ secrets.WOLF_PROFILE_URL }}
         run: |
-          echo ""
-          echo "========================================"
-          echo "🔐 Checking WOLF Profile"
-          echo "========================================"
-          
           if [ -z "$WOLF_PROFILE_URL" ]; then
             echo "❌ WOLF_PROFILE_URL is NOT available"
             exit 1
           fi
-          
           echo "✅ WOLF_PROFILE_URL is available"
-          echo "========================================"
 
-      # ======================================================
-      # Start WOLF
-      # ======================================================
       - name: Start WOLF Bot
         env:
           WOLF_PROFILE_URL: ${{ secrets.WOLF_PROFILE_URL }}
         run: |
           echo ""
-          echo "========================================"
           echo "🐺 WOLF BOT STARTING"
-          echo "========================================"
           echo "🕐 Start time: $(date)"
           echo "⏱️ Maximum runtime: 5 hours"
-          echo "🔄 A new run every 4 hours cancels this one automatically"
-          echo "📱 DEVICE: web"
-          echo "🛡️ APP CHECK: true"
           echo "========================================"
 
           RUN_SECONDS=18000
           START_TIME=$(date +%s)
           END_TIME=$((START_TIME + RUN_SECONDS))
 
-          # ====================================================
-          # Cleanup
-          # ====================================================
           cleanup() {
             echo ""
-            echo "========================================"
             echo "🧹 WOLF CLEANUP"
-            echo "========================================"
             echo "🛑 Stopping WOLF..."
-
             if [ -n "$BOT_PID" ]; then
               if kill -0 "$BOT_PID" 2>/dev/null; then
-                echo ""
-                echo "🐺 WOLF PID: $BOT_PID"
                 echo "📡 Sending SIGTERM..."
                 kill -TERM -- "-$BOT_PID" 2>/dev/null || true
                 sleep 5
-
                 if kill -0 "$BOT_PID" 2>/dev/null; then
-                  echo "⚠️ WOLF is still running"
                   echo "💀 Sending SIGKILL..."
                   kill -KILL -- "-$BOT_PID" 2>/dev/null || true
                 fi
               else
                 echo "ℹ️ WOLF process already stopped"
               fi
-            else
-              echo "ℹ️ WOLF PID is not available"
             fi
-
-            echo ""
             echo "✅ WOLF cleanup completed"
-            echo "========================================"
           }
 
           trap cleanup EXIT
           trap cleanup INT
           trap cleanup TERM
 
-          # ====================================================
-          # Start WOLF
-          # ====================================================
-          echo ""
-          echo "========================================"
           echo "🚀 STARTING WOLF"
-          echo "========================================"
-          echo "🕐 $(date)"
-          echo "========================================"
-
-          # ✅ تم التعديل: تشغيل البوت باستخدام xvfb-run
+          # ✅ تشغيل البوت باستخدام xvfb-run لتوفير شاشة وهمية
           setsid xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" npm start &
-
           BOT_PID=$!
 
-          echo ""
           echo "🐺 WOLF PID: $BOT_PID"
           echo "🕐 Started: $(date)"
-          echo "========================================"
 
-          # ====================================================
-          # Monitor WOLF
-          # ====================================================
           while true; do
             NOW=$(date +%s)
 
             if [ "$NOW" -ge "$END_TIME" ]; then
-              echo ""
-              echo "========================================"
-              echo "⏰ 5 HOURS COMPLETED"
-              echo "========================================"
-              echo "🕐 Current time: $(date)"
-              echo "🛑 Stopping WOLF..."
-              echo "========================================"
+              echo "⏰ 5 HOURS COMPLETED. Stopping WOLF..."
               exit 0
             fi
 
             if ! kill -0 "$BOT_PID" 2>/dev/null; then
-              echo ""
-              echo "========================================"
               echo "⚠️ WOLF STOPPED UNEXPECTEDLY"
-              echo "========================================"
               wait "$BOT_PID" 2>/dev/null || true
-              echo "❌ WOLF process is no longer running"
-              echo "========================================"
               exit 1
             fi
 
@@ -213,38 +120,18 @@ jobs:
             MINUTES=$(((ELAPSED % 3600) / 60))
             SECONDS=$((ELAPSED % 60))
 
-            echo ""
-            echo "🐺 WOLF is running"
-            echo "⏱️ Runtime: ${HOURS}h ${MINUTES}m ${SECONDS}s"
-            echo "🕐 $(date)"
-            echo "📱 DEVICE: web"
-            echo "🛡️ APP CHECK: true"
-            echo "========================================"
-
+            echo "🐺 WOLF is running | ⏱️ Runtime: ${HOURS}h ${MINUTES}m ${SECONDS}s"
             sleep 30
           done
 
-      # ======================================================
-      # Final Cleanup
-      # ======================================================
       - name: Final Cleanup
         if: always()
         run: |
-          echo ""
-          echo "========================================"
           echo "🧹 FINAL CLEANUP"
-          echo "========================================"
-          echo "🛑 Cleaning current WOLF process..."
-
           pkill -TERM -f "node check-wolf.js" 2>/dev/null || true
           sleep 2
           pkill -KILL -f "node check-wolf.js" 2>/dev/null || true
-          
-          # تنظيف عمليات xvfb المتبقية
           pkill -TERM -f "Xvfb" 2>/dev/null || true
           sleep 2
           pkill -KILL -f "Xvfb" 2>/dev/null || true
-
-          echo ""
           echo "✅ Final cleanup completed"
-          echo "========================================"
