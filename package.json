@@ -1,5 +1,5 @@
 {
-  "name": "service-runner",
+  "name": "wolf-stage-bot",
   "version": "1.0.0",
   "type": "module",
   "scripts": {
@@ -7,9 +7,8 @@
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
-    "puppeteer": "^24.0.0",
-    "playwright": "^1.55.0",
+    "playwright": "^1.49.1",
     "socket.io-client": "^4.8.1",
-    "wolf.js": "2.7.10"
+    "wolf.js": "^2.7.10"
   }
 }
