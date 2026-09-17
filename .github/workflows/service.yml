@@ -31,7 +31,21 @@ jobs:
           cache: "npm"
 
       # ======================================================
-      # ★ استرجاع البروفايل من الكاش (الخطوة السحرية)
+      # ★ Install FFmpeg (مطلوب للـ Stage)
+      # ======================================================
+      - name: Install FFmpeg
+        run: |
+          echo "🎬 Installing FFmpeg..."
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          echo ""
+          echo "🔎 التحقق من التثبيت..."
+          which ffmpeg
+          ffmpeg -version | head -n 1
+          echo "✅ FFmpeg installed successfully"
+
+      # ======================================================
+      # ★ استرجاع البروفايل من الكاش
       # ======================================================
       - name: Restore WOLF profile from cache
         id: profile-cache
@@ -80,9 +94,12 @@ jobs:
       - name: Start WOLF Bot
         env:
           WOLF_PROFILE_URL: ${{ secrets.WOLF_PROFILE_URL }}
+          PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          FFMPEG_PATH: /usr/bin/ffmpeg
         run: |
           echo "🐺 WOLF BOT STARTING"
           echo "🕐 Start time: $(date)"
+          echo "🎬 FFMPEG: $(which ffmpeg)"
           echo "========================================"
 
           RUN_SECONDS=18000
@@ -133,7 +150,7 @@ jobs:
           done
 
       # ======================================================
-      # ★ حفظ البروفايل في الكاش (للاستخدام في التشغيل القادم)
+      # ★ حفظ البروفايل في الكاش
       # ======================================================
       - name: Save WOLF profile to cache
         if: always()
