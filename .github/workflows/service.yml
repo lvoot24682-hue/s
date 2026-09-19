@@ -31,7 +31,7 @@ jobs:
           cache: "npm"
 
       # ======================================================
-      # ★ Install FFmpeg (مطلوب للـ Stage)
+      # Install FFmpeg
       # ======================================================
       - name: Install FFmpeg
         run: |
@@ -45,59 +45,53 @@ jobs:
           echo "✅ FFmpeg installed successfully"
 
       # ======================================================
-      # ★ استرجاع البروفايل من الكاش
-      # ======================================================
-      - name: Restore WOLF profile from cache
-        id: profile-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ./wolf-runtime
-          key: wolf-profile-cache-${{ github.run_id }}
-          restore-keys: |
-            wolf-profile-cache-
-
-      - name: Profile cache status
-        run: |
-          if [ -d "./wolf-runtime/profile" ] && [ -n "$(ls -A ./wolf-runtime/profile 2>/dev/null)" ]; then
-            echo "✅ Cache موجود — سيتم استخدام البروفايل المُحدَّث"
-          else
-            echo "ℹ️ لا يوجد Cache — سيتم التنزيل من Google Drive"
-          fi
-
-      # ======================================================
       # Install Dependencies
       # ======================================================
       - name: Install dependencies
         run: |
           echo "📦 Installing dependencies..."
           npm install
-          echo "🌐 Installing Playwright Chromium..."
-          npx playwright install --with-deps chromium
           echo "✅ Dependencies installed"
 
       # ======================================================
-      # Check WOLF Profile Secret
+      # Verify WOLF_TOKENS_PAT
       # ======================================================
-      - name: Check WOLF Profile Secret
+      - name: Verify WOLF_TOKENS_PAT
         env:
-          WOLF_PROFILE_URL: ${{ secrets.WOLF_PROFILE_URL }}
+          WOLF_TOKENS_PAT: ${{ secrets.WOLF_TOKENS_PAT }}
         run: |
-          if [ -z "$WOLF_PROFILE_URL" ]; then
-            echo "❌ WOLF_PROFILE_URL is NOT available"
+          echo "========================================"
+          echo "🔐 Verifying WOLF_TOKENS_PAT"
+          echo "========================================"
+
+          if [ -z "$WOLF_TOKENS_PAT" ]; then
+            echo "❌ WOLF_TOKENS_PAT is NOT available"
             exit 1
           fi
-          echo "✅ WOLF_PROFILE_URL is available"
+          echo "✅ WOLF_TOKENS_PAT is available"
+
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token $WOLF_TOKENS_PAT" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/anaayaar-ops/too/contents/tokens.json")
+
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ Failed to access too/tokens.json: HTTP $STATUS"
+            exit 1
+          fi
+          echo "✅ Access to too/tokens.json confirmed"
 
       # ======================================================
       # Start WOLF Bot
       # ======================================================
       - name: Start WOLF Bot
         env:
-          WOLF_PROFILE_URL: ${{ secrets.WOLF_PROFILE_URL }}
+          WOLF_TOKENS_PAT: ${{ secrets.WOLF_TOKENS_PAT }}
           PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           FFMPEG_PATH: /usr/bin/ffmpeg
         run: |
           echo "🐺 WOLF BOT STARTING"
+          echo "📦 Tokens from: anaayaar-ops/too"
           echo "🕐 Start time: $(date)"
           echo "🎬 FFMPEG: $(which ffmpeg)"
           echo "========================================"
@@ -148,16 +142,6 @@ jobs:
             echo "🐺 WOLF is running | ⏱️ ${H}h ${M}m ${S}s | $(date)"
             sleep 30
           done
-
-      # ======================================================
-      # ★ حفظ البروفايل في الكاش
-      # ======================================================
-      - name: Save WOLF profile to cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ./wolf-runtime
-          key: wolf-profile-cache-${{ github.run_id }}
 
       # ======================================================
       # Final Cleanup
