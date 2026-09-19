@@ -30,6 +30,7 @@ const MAX_OCCUPANTS_TO_JOIN = 1;
 
 let WOLF_TOKEN = null;
 let WOLF_APP_CHECK_TOKEN = null;
+let WOLF_DEVICE_TOKEN = null;
 
 let service = null;
 let socket = null;
@@ -59,32 +60,37 @@ function maskToken(value) {
 }
 
 // ============================================================
-// Load WOLF Credentials
+// Load WOLF Credentials (من GitHub)
 // ============================================================
 
 async function loadWolfCredentials() {
     console.log("\n========================================");
-    console.log("🔐 تحميل WOLF Profile");
+    console.log("🔐 تحميل الرموز من GitHub (too)");
     console.log("========================================");
 
     const session = await loadSession();
 
     if (!session || !session.token) {
-        throw new Error("❌ تعذر تحميل WOLF Chrome Profile أو التوكن الأساسي");
+        throw new Error("❌ تعذر تحميل الرموز من tokens.json");
     }
 
     WOLF_TOKEN = session.token;
-    WOLF_APP_CHECK_TOKEN = session.appCheckToken; // قد يكون null، وهذا طبيعي
+    WOLF_APP_CHECK_TOKEN = session.appCheckToken;
+    WOLF_DEVICE_TOKEN = session.deviceToken || '';
 
-    console.log("✅ تم الحصول على WOLF credentials من Chrome");
+    console.log("✅ تم الحصول على WOLF credentials من GitHub");
     console.log(`🔐 v3APIToken: ${maskToken(WOLF_TOKEN)}`);
-    
+
     if (WOLF_APP_CHECK_TOKEN) {
         console.log(`🛡️ appCheckToken: ${maskToken(WOLF_APP_CHECK_TOKEN)}`);
     } else {
-        console.log("⚠️ appCheckToken غير موجود حالياً، سيتم الاعتماد على الجلسة المخزنة.");
+        console.log("⚠️ appCheckToken غير موجود");
     }
-    
+
+    if (WOLF_DEVICE_TOKEN) {
+        console.log(`📱 deviceToken: ${maskToken(WOLF_DEVICE_TOKEN)}`);
+    }
+
     console.log("📱 Device: web");
     console.log("========================================");
 }
@@ -161,7 +167,9 @@ async function connectWolfSocket() {
     const connection = service._frameworkConfig?.get?.("connection");
     const host = connection?.host || "https://v3-rc.palringo.com";
     const port = connection?.port ?? 443;
-    const connectionDevice = connection?.query?.device || "web";
+
+    // ★ نجبر web
+    const connectionDevice = "web";
 
     const isAppCheckEnabled = WOLF_APP_CHECK_TOKEN ? 'true' : 'false';
 
@@ -186,7 +194,8 @@ async function connectWolfSocket() {
             state: service.config.framework.login.onlineState,
             version: connection?.version || undefined,
             isAppCheckEnabled: isAppCheckEnabled,
-            appCheckToken: WOLF_APP_CHECK_TOKEN || undefined
+            appCheckToken: WOLF_APP_CHECK_TOKEN || undefined,
+            deviceToken: WOLF_DEVICE_TOKEN || undefined
         }
     });
 
@@ -380,19 +389,18 @@ async function shutdown(signal) {
     try { socket?.disconnect(); } catch {}
     try { service?.websocket?.socket?.disconnect(); } catch {}
 
-    // ✅ إغلاق المتصفح لحفظ الجلسة في الكاش
     try {
         if (!browserClosed) {
             browserClosed = true;
             await closeSessionBrowser();
         }
     } catch (err) {
-        console.log("⚠️ تعذر إغلاق جلسة Chrome:", err?.message || err);
+        console.log("⚠️ تعذر إغلاق الجلسة:", err?.message || err);
     }
 
     console.log("🔌 تم إغلاق اتصال WOLF.");
     console.log("👋 تم إيقاف البوت.");
-    
+
     process.exitCode = 0;
     setTimeout(() => process.exit(0), 1500).unref();
 }
@@ -408,7 +416,7 @@ process.on("SIGHUP", () => shutdown("SIGHUP"));
 async function main() {
     console.log("\n🐺 WOLF Bot started");
     console.log("========================================");
-    console.log("🔐 WOLF Chrome Profile Login");
+    console.log("🔐 Tokens from: anaayaar-ops/too");
     console.log("========================================");
 
     try {
@@ -435,8 +443,7 @@ async function main() {
         console.log("⏱️ CHECK_INTERVAL: 10 minutes");
         console.log("========================================");
 
-        // إغلاق تلقائي قبل انتهاء الـ workflow بـ 5 دقائق
-        const AUTO_SHUTDOWN_MS = (4 * 60 + 55) * 60 * 1000; // 4:55
+        const AUTO_SHUTDOWN_MS = (4 * 60 + 55) * 60 * 1000;
         setTimeout(() => {
             console.log('⏰ انتهت مدة التشغيل التلقائي — إغلاق سلس');
             shutdown(0);
