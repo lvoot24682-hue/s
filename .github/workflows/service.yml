@@ -2,8 +2,6 @@ name: WOLF Bot
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 */4 * * *"   # كل 4 ساعات
 
 concurrency:
   group: wolf-bot
@@ -12,7 +10,7 @@ concurrency:
 jobs:
   wolf:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 360
 
     steps:
       # ======================================================
